@@ -12,6 +12,16 @@ extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
 
 /* ================= 1. 编写通用的硬件底层函数 (HW_ 前缀) ================= */
+/**
+ * @brief  硬件IO口配置
+ */
+static void HW_GPIO_Config(void) {
+    /* 如果是 ESP32，这里就写 gpio_config_t 逻辑 */
+    /* 如果是 STM32 且没用 CubeMX，这里写 GPIO_InitTypeDef 逻辑 */
+    
+    // 示范：即使是用 CubeMX，也可以在这里统一处理电机驱动的 STBY 引脚
+    // HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); 
+}
 
 /**
  * @brief  硬件定时器启动
@@ -34,10 +44,14 @@ static void HW_Gpio_Write(void *port, uint16_t pin, uint8_t level) {
 }
 
 /**
- * @brief  底层 PWM 设置实现
+ * @brief  底层PWM设置实现
+ * @param  timer: 定时器句柄指针
+ * @param  channel: 定时器通道号
+ * @param  duty: PWM占空比值
  */
-static void HW_Pwm_Write(uint32_t duty) {
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty);
+static void HW_Pwm_Write(void *timer, uint32_t channel, uint32_t duty) {
+    if (timer == NULL) return;
+    __HAL_TIM_SET_COMPARE((TIM_HandleTypeDef *)timer, channel, duty);
 }
 
 /**
@@ -59,8 +73,11 @@ motor_t Motor_Left = {
     // 1. 物理引脚配置 (再也不需要去代码里硬找引脚了)
     .dir_pin1 = {GPIOB, GPIO_PIN_12}, 
     .dir_pin2 = {GPIOB, GPIO_PIN_13},
+    .pwm_timer = &htim1,
+    .pwm_channel = TIM_CHANNEL_1,
 
     // 2. 硬件方法绑定
+    .Gpio_Config = HW_Gpio_Config,
     .Init       = HW_Timer_Init,
     .Gpio_Write = HW_Gpio_Write,
     .Pwm_Write  = HW_Pwm_Write,

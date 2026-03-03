@@ -11,7 +11,8 @@
  */
 void Motor_Init_Device(motor_t *motor) {
     if (motor == NULL) return; 
-    
+    //motor->Gpio_Config();
+
     motor->current_pwm = 0;
     motor->encoder_speed = 0;
     motor->total_position = 0;
@@ -38,7 +39,7 @@ void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
             motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 0);
         }
         if (motor->Pwm_Write != NULL) {
-            motor->Pwm_Write((uint32_t)speed_val);
+            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, (uint32_t)speed_val);
         }
     } 
     else if (speed_val < 0) {
@@ -48,7 +49,7 @@ void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
             motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 1);
         }
         if (motor->Pwm_Write != NULL) {
-            motor->Pwm_Write((uint32_t)(-speed_val)); // 取绝对值下发
+            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, (uint32_t)(-speed_val)); // 取绝对值下发
         }
     } 
     else {
@@ -58,7 +59,7 @@ void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
             motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 0);
         }
         if (motor->Pwm_Write != NULL) {
-            motor->Pwm_Write(0);
+            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, 0);
         }
     }
 }

@@ -40,6 +40,8 @@ typedef struct motor_dev {
     /* --- 1. 物理配置 (Config) --- */
     motor_gpio_t dir_pin1;   // 方向控制引脚 1
     motor_gpio_t dir_pin2;   // 方向控制引脚 2
+    void     *pwm_timer;     // PWM 定时器句柄
+    uint32_t  pwm_channel;   // PWM 通道号
 
     /* --- 2. 运行状态 (Status) --- */
     int32_t current_pwm;     // 当前设定的 PWM 值 (带符号)
@@ -48,9 +50,10 @@ typedef struct motor_dev {
 
     /* --- 3. 抽象硬件操作方法 (Methods / Function Pointers) --- */
     // 这些“空壳函数”必须在应用层实例化时绑定真实的硬件代码
+    void    (*Gpio_Config)(void);                                   // 硬件 GPIO 配置
     void    (*Init)(void);                                          // 硬件外设初始化
     void    (*Gpio_Write)(void *port, uint16_t pin, uint8_t level); // 抽象 GPIO 写操作
-    void    (*Pwm_Write)(uint32_t duty);                            // 抽象 PWM 写操作 (占空比正数)
+    void    (*Pwm_Write)(void *timer, uint32_t channel, uint32_t duty); // 抽象 PWM 写操作 (占空比正数)
     int32_t (*Enc_Read)(void);                                      // 抽象编码器读取 (读取后需清零)
 } motor_t;
 

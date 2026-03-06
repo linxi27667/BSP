@@ -1,4 +1,4 @@
-#include "mpu6050.h"
+#include "app_mpu6050.h"
 #include "sw_i2c.h" // 获取 I2C_Bus_1
 #include "main.h"
 

@@ -1,4 +1,4 @@
-#include "sw_i2c.h"
+#include "app_sw_i2c.h"
 #include "main.h"
 
 static void Delay_us(uint32_t us){

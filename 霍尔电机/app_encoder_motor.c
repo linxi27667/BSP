@@ -5,7 +5,7 @@
  */
 
 #include "main.h" // 【唯一解禁区】整个库只有这里可以包含底层硬件头文件！
-#include "encoder_motor.h"
+#include "app_encoder_motor.h"
 
 /* 引入 CubeMX 生成的定时器句柄 */
 extern TIM_HandleTypeDef htim1;

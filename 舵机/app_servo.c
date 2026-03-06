@@ -3,7 +3,7 @@
  * @brief   舵机硬件底层绑定代码
  */
 
-#include "servo.h"
+#include "app_servo.h"
 #include "main.h"
 
 /* 声明外部的定时器句柄 */

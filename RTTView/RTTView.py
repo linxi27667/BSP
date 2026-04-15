@@ -77,11 +77,15 @@ class RTTView(QWidget):
 
         self.initQwtPlot()
 
+        self.auto_scroll = True
+        self.txtMain_font_size = 10
+        self.applyDarkTheme()
+
         self.rcvbuff = b''
         self.rcvfile = None
 
         self.elffile = None
-        
+
         self.tmrRTT = QtCore.QTimer()
         self.tmrRTT.setInterval(10)
         self.tmrRTT.timeout.connect(self.on_tmrRTT_timeout)
@@ -91,6 +95,17 @@ class RTTView(QWidget):
         self.rtt_fail_count = 0  # consecutive read failure counter (for auto-reconnect)
         self.rtt_reconnecting = False  # flag to prevent multiple reconnect attempts
         self._expected_RdOff = 0  # tracks the RdOff value we last wrote to MCU
+        self.auto_scroll = True  # auto-scroll enabled by default
+
+        # Install event filter for Ctrl+wheel zoom
+        self.txtMain.installEventFilter(self)
+
+        # Add auto-scroll checkbox programmatically
+        self.chkAutoScroll = QtWidgets.QCheckBox('自动滚动', self)
+        self.chkAutoScroll.setChecked(True)
+        self.chkAutoScroll.stateChanged.connect(self.on_chkAutoScroll_stateChanged)
+        # Place it near the existing controls in the bottom bar
+        self.gLayout1.addWidget(self.chkAutoScroll, 0, 4, 1, 1)
     
     def initSetting(self):
         if not os.path.exists('setting.ini'):
@@ -157,6 +172,312 @@ class RTTView(QWidget):
         self.vLayout.insertWidget(0, self.ChartView)
         
         self.PlotCurve = [QLineSeries() for i in range(self.N_CURVE)]
+
+    def applyDarkTheme(self):
+        """Apply JLink-style dark theme to the entire application."""
+        dark_qss = """
+            QWidget {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QMainWindow, QWidget {
+                background-color: #1E1E1E;
+            }
+            QTextEdit, QPlainTextEdit {
+                background-color: #1E1E1E;
+                border: 1px solid #3C3C3C;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+                selection-background-color: #264F78;
+            }
+            QComboBox {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                padding: 2px 6px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid #D4D4D4;
+                margin-right: 6px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                selection-background-color: #264F78;
+            }
+            QPushButton {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                padding: 4px 12px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #4C4C4C;
+                border-color: #666666;
+            }
+            QPushButton:pressed {
+                background-color: #2C2C2C;
+            }
+            QTableWidget {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                border: 1px solid #3C3C3C;
+                gridline-color: #3C3C3C;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QTableWidget::item:selected {
+                background-color: #264F78;
+            }
+            QHeaderView::section {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                padding: 2px 4px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QCheckBox {
+                color: #D4D4D4;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+                spacing: 6px;
+            }
+            QLabel {
+                color: #D4D4D4;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QGroupBox {
+                color: #D4D4D4;
+                border: 1px solid #3C3C3C;
+                margin-top: 8px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 4px;
+            }
+            QScrollBar:vertical {
+                background-color: #1E1E1E;
+                width: 10px;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555555;
+                min-height: 20px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #666666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            QScrollBar:horizontal {
+                background-color: #1E1E1E;
+                height: 10px;
+                border: none;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #555555;
+                min-width: 20px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #666666;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
+            QMenu {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QMenu::item:selected {
+                background-color: #264F78;
+            }
+            QFileDialog, QDialog {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+            }
+            QLineEdit {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #555555;
+                padding: 2px 6px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+        """
+        self.setStyleSheet(dark_qss)
+
+        # Set Consolas font on txtMain
+        self.txtMain_font = QtGui.QFont('Consolas', self.txtMain_font_size)
+        self.txtMain.setFont(self.txtMain_font)
+
+        # Set default text color via palette (lower priority than QTextCharFormat, so ANSI colors will override)
+        palette = self.txtMain.palette()
+        palette.setColor(QtGui.QPalette.Text, QtGui.QColor('#D4D4D4'))
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor('#1E1E1E'))
+        self.txtMain.setPalette(palette)
+
+    # ANSI SGR color codes mapping
+    _ansi_colors = {
+        30: '#808080',  # Black   -> gray (on dark bg)
+        31: '#FF6B6B',  # Red
+        32: '#6BCB6B',  # Green
+        33: '#FFD76B',  # Yellow
+        34: '#6B9FFF',  # Blue
+        35: '#D06BFF',  # Magenta
+        36: '#6BFFFF',  # Cyan
+        37: '#D4D4D4',  # White   -> light gray
+        90: '#555555',  # Bright Black
+        91: '#FF8888',  # Bright Red
+        92: '#88FF88',  # Bright Green
+        93: '#FFFF88',  # Bright Yellow
+        94: '#88BBFF',  # Bright Blue
+        95: '#FF88FF',  # Bright Magenta
+        96: '#88FFFF',  # Bright Cyan
+        97: '#FFFFFF',  # Bright White
+    }
+
+    def _insert_ansi_colored_text(self, text):
+        """Parse ANSI SGR escape sequences and insert colored text using QTextCharFormat.
+
+        Handles sequences like: ESC[31;2m (red), ESC[36;2m (cyan), ESC[0m (reset), etc.
+        Uses QTextCursor.insertText() with character format for reliable color rendering.
+        """
+        if not text:
+            return
+
+        # State machine: parse text and track current color
+        spans = []  # list of (color_hex_str, plain_text) tuples
+        current_color = None
+        i = 0
+        n = len(text)
+        current_text = []
+
+        while i < n:
+            if text[i] == '\x1b' and i + 1 < n and text[i + 1] == '[':
+                if current_text:
+                    spans.append((current_color, ''.join(current_text)))
+                    current_text = []
+
+                i += 2  # skip ESC + '['
+                params = []
+                param_buf = ''
+                found_terminator = False
+                while i < n:
+                    c = text[i]
+                    if c.isdigit():
+                        param_buf += c
+                    elif c == ';':
+                        if param_buf:
+                            params.append(int(param_buf))
+                            param_buf = ''
+                    elif c.isalpha():
+                        if param_buf:
+                            params.append(int(param_buf))
+                        cmd = c
+                        found_terminator = True
+                        i += 1
+                        break
+                    else:
+                        break
+                    i += 1
+
+                if not found_terminator:
+                    # Incomplete sequence (split across chunks), keep for next time
+                    current_text.append('\x1b[')
+                    continue
+
+                # Process SGR parameters (only for 'm' terminator)
+                if cmd == 'm':
+                    if not params:
+                        current_color = None
+                    else:
+                        for p in params:
+                            if p == 0:
+                                current_color = None
+                            elif 30 <= p <= 37:
+                                current_color = self._ansi_colors.get(p, '#D4D4D4')
+                            elif 90 <= p <= 97:
+                                current_color = self._ansi_colors.get(p, '#D4D4D4')
+                            elif p == 38:
+                                idx = params.index(38)
+                                if idx + 2 < len(params):
+                                    c256 = params[idx + 2]
+                                    current_color = self._ansi_colors.get(c256, '#D4D4D4')
+                continue
+
+            current_text.append(text[i])
+            i += 1
+
+        if current_text:
+            spans.append((current_color, ''.join(current_text)))
+
+        if not spans:
+            return
+
+        # Insert using QTextCharFormat and setTextCursor to ensure widget updates
+        cursor = self.txtMain.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+
+        for color, txt in spans:
+            fmt = QtGui.QTextCharFormat()
+            if color:
+                fmt.setForeground(QtGui.QColor(color))
+            else:
+                fmt.setForeground(QtGui.QColor('#D4D4D4'))
+            cursor.insertText(txt, fmt)
+
+        self.txtMain.setTextCursor(cursor)
+
+        # Auto-scroll
+        if self.auto_scroll:
+            self.txtMain.verticalScrollBar().setValue(
+                self.txtMain.verticalScrollBar().maximum()
+            )
+
+    def eventFilter(self, obj, event):
+        """Handle Ctrl+wheel for font zoom in/out."""
+        if event.type() == QtCore.QEvent.Wheel:
+            if event.modifiers() & Qt.ControlModifier:
+                delta = event.angleDelta().y()
+                if delta > 0:
+                    self.txtMain_font_size = min(32, self.txtMain_font_size + 1)
+                else:
+                    self.txtMain_font_size = max(6, self.txtMain_font_size - 1)
+                self.txtMain_font.setPointSize(self.txtMain_font_size)
+                self.txtMain.setFont(self.txtMain_font)
+                return True
+        return super().eventFilter(obj, event)
 
     def daplink_detect(self):
         try:
@@ -333,14 +654,12 @@ class RTTView(QWidget):
 
     def _auto_reconnect(self):
         """Auto-reconnect after MCU reset. Re-establishes SWD link and re-scans for _SEGGER_RTT."""
-        # Close old connection
         try:
             self.xlk.close()
         except:
             pass
         self.daplink_detect()
 
-        # Reconnect via DAPLink
         from pyocd.coresight import dap, ap, cortex_m
 
         daplink_index = None
@@ -364,7 +683,6 @@ class RTTView(QWidget):
 
         self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
 
-        # Re-scan for _SEGGER_RTT
         search_addr_text = self.cmbAddr.currentText()
         if re.match(r'0[xX][0-9a-fA-F]{8}', search_addr_text):
             addr = int(search_addr_text, 16)
@@ -380,7 +698,7 @@ class RTTView(QWidget):
                 rtt_cb = SEGGER_RTT_CB.from_buffer(bytearray(data))
                 self.aUpAddr = self.RTTAddr + 16 + 4 + 4
                 self.aDownAddr = self.aUpAddr + ctypes.sizeof(RingBuffer) * rtt_cb.MaxNumUpBuffers
-                self.txtMain.append(f'[+] 重连成功: _SEGGER_RTT @ 0x{self.RTTAddr:08X} with {rtt_cb.MaxNumUpBuffers} aUp and {rtt_cb.MaxNumDownBuffers} aDown\n')
+                self.txtMain.append(f'[+] 重连成功: _SEGGER_RTT @ 0x{self.RTTAddr:08X}\n')
                 self.rtt_cb = True
                 self.rtt_fail_count = 0
                 return
@@ -425,7 +743,7 @@ class RTTView(QWidget):
                             vals.append(struct.unpack(fmt, bytes(buf))[0])
 
                     rcvdbytes = b'\t'.join(f'{val}'.encode() for val in vals) + b',\n'
-            
+
             except Exception as e:
                 rcvdbytes = b''
                 self.rtt_fail_count += 1
@@ -543,10 +861,10 @@ class RTTView(QWidget):
 
                             else:
                                 break
-                    
+
                     if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
-                    self.txtMain.moveCursor(QtGui.QTextCursor.End)
-                    self.txtMain.insertPlainText(text)
+                    # Use ANSI color rendering for text output
+                    self._insert_ansi_colored_text(text)
 
         else:
             if self.tmrRTT_Cnt % 100 == 1:
@@ -722,6 +1040,10 @@ class RTTView(QWidget):
     def on_chkWave_stateChanged(self, state):
         self.ChartView.setVisible(state == Qt.Checked)
         self.txtMain.setVisible(state == Qt.Unchecked)
+
+    @pyqtSlot(int)
+    def on_chkAutoScroll_stateChanged(self, state):
+        self.auto_scroll = (state == Qt.Checked)
 
     @pyqtSlot()
     def on_btnClear_clicked(self):

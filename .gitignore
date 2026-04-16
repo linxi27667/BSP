@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+build/
+dist/
+
+# PyInstaller
+*.spec
+
+# RTT data files
+RTTView/rtt_data*.txt
+RTTView/setting.ini
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Built executable
+RTTView.exe

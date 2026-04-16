@@ -70,6 +70,10 @@ class RTTView(QWidget):
 
         self.hWidget2.setVisible(False)
 
+        # Improve layout breathing room
+        self.layout().setContentsMargins(12, 12, 12, 12)
+        self.layout().setSpacing(8)
+
         self.tblVar.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
 
         self.Vars = {}  # {name: Variable}
@@ -80,11 +84,13 @@ class RTTView(QWidget):
         self.initQwtPlot()
 
         self.auto_scroll = True
-        self.txtMain_font_size = 14
+        self.txtMain_font_size = 10
         self.applyDarkTheme()
 
         self.rcvbuff = b''
         self.rcvfile = None
+        self._rx_bytes = 0
+        self._rx_rate_update = 0
 
         self.elffile = None
 
@@ -126,6 +132,16 @@ class RTTView(QWidget):
 
         # Track connection state instead of relying on button text
         self._connected = False
+
+        # ── Status bar ──
+        self._buildStatusBar()
+
+        # ── Author line with logo ──
+        self._buildAuthorLine()
+
+        # ── Window icon ──
+        icon = QtGui.QIcon('Image/serial.ico')
+        self.setWindowIcon(icon)
     
     def initSetting(self):
         if not os.path.exists('setting.ini'):
@@ -194,171 +210,292 @@ class RTTView(QWidget):
         self.PlotCurve = [QLineSeries() for i in range(self.N_CURVE)]
 
     def applyDarkTheme(self):
-        """Apply JLink-style dark theme to the entire application."""
+        """Apply modern dark theme (VS Code style) to the entire application."""
         dark_qss = """
+            /* ═══ Global ═══ */
             QWidget {
                 background-color: #1E1E1E;
                 color: #D4D4D4;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
             }
-            QMainWindow, QWidget {
-                background-color: #1E1E1E;
-            }
-            QTextEdit, QPlainTextEdit {
-                background-color: #1E1E1E;
+
+            /* ═══ Text Areas ═══ */
+            QTextEdit {
+                background-color: #252526;
                 border: 1px solid #3C3C3C;
+                border-radius: 6px;
+                padding: 8px;
                 font-family: Consolas, 'Courier New', monospace;
                 selection-background-color: #264F78;
+                color: #D4D4D4;
+            }
+            QTextEdit:focus {
+                border-color: #007ACC;
             }
             QTextEdit#txtMain {
-                font-size: 14pt;
-                line-height: 1.2;
+                font-size: 10pt;
+                border: 1px solid #3C3C3C;
+                border-radius: 6px;
             }
             QTextEdit#txtSend {
                 font-size: 10pt;
+                border-radius: 6px;
             }
+
+            /* ═══ Buttons ═══ */
+            QPushButton {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+                min-height: 26px;
+            }
+            QPushButton:hover {
+                background-color: #4A4A4A;
+                border-color: #606060;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+                border-color: #505050;
+                padding: 7px 15px 5px 17px;
+            }
+            QPushButton#btnOpen {
+                background-color: #2D5A3D;
+                color: #88DD88;
+                border: 1px solid #3A7A4A;
+                font-weight: bold;
+            }
+            QPushButton#btnOpen:hover {
+                background-color: #3A6A4A;
+                border-color: #4A9A5A;
+            }
+            QPushButton#btnOpen:pressed {
+                background-color: #2D5A3D;
+                border-color: #3A7A4A;
+                padding: 7px 15px 5px 17px;
+            }
+            QPushButton#btnClear {
+                background-color: #3C3C3C;
+                color: #DDAA66;
+                border: 1px solid #505050;
+            }
+            QPushButton#btnClear:hover {
+                background-color: #4A4A3A;
+                border-color: #606050;
+            }
+            QPushButton:disabled {
+                background-color: #2D2D2D;
+                color: #555555;
+                border-color: #3C3C3C;
+            }
+
+            /* ═══ ComboBox ═══ */
             QComboBox {
                 background-color: #3C3C3C;
                 color: #D4D4D4;
-                border: 1px solid #555555;
-                padding: 2px 6px;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 4px 10px;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
+                min-height: 24px;
+            }
+            QComboBox:hover {
+                border-color: #606060;
+            }
+            QComboBox:focus {
+                border-color: #007ACC;
+            }
+            QComboBox:disabled {
+                background-color: #2D2D2D;
+                color: #555555;
+                border-color: #3C3C3C;
             }
             QComboBox::drop-down {
                 border: none;
-                width: 20px;
+                width: 24px;
+                border-left: 1px solid #505050;
+                border-radius: 0 5px 5px 0;
             }
             QComboBox::down-arrow {
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 6px solid #D4D4D4;
+                border-top: 5px solid #999;
                 margin-right: 6px;
             }
             QComboBox QAbstractItemView {
                 background-color: #3C3C3C;
                 color: #D4D4D4;
-                border: 1px solid #555555;
-                selection-background-color: #264F78;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                selection-background-color: #007ACC;
+                selection-color: #FFFFFF;
+                outline: none;
+                padding: 2px;
             }
-            QPushButton {
-                background-color: #3C3C3C;
-                color: #D4D4D4;
-                border: 1px solid #555555;
-                padding: 4px 12px;
-                font-family: Consolas, 'Courier New', monospace;
-                font-size: 10pt;
+            QComboBox QAbstractItemView::item {
+                min-height: 24px;
+                padding: 2px 8px;
+                border-radius: 3px;
             }
-            QPushButton:hover {
-                background-color: #4C4C4C;
-                border-color: #666666;
-            }
-            QPushButton:pressed {
-                background-color: #2C2C2C;
-            }
+
+            /* ═══ Table ═══ */
             QTableWidget {
-                background-color: #1E1E1E;
+                background-color: #252526;
                 color: #D4D4D4;
                 border: 1px solid #3C3C3C;
-                gridline-color: #3C3C3C;
+                border-radius: 6px;
+                gridline-color: #333333;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
+                selection-background-color: #264F78;
             }
-            QTableWidget::item:selected {
-                background-color: #264F78;
+            QTableWidget::item {
+                padding: 2px 4px;
             }
             QHeaderView::section {
-                background-color: #3C3C3C;
+                background-color: #333333;
                 color: #D4D4D4;
-                border: 1px solid #555555;
-                padding: 2px 4px;
+                border: none;
+                padding: 4px 8px;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
             }
+
+            /* ═══ CheckBox ═══ */
             QCheckBox {
                 color: #D4D4D4;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
                 spacing: 6px;
             }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #555;
+                border-radius: 3px;
+                background-color: #3C3C3C;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #007ACC;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #007ACC;
+                border-color: #007ACC;
+            }
+
+            /* ═══ Label ═══ */
             QLabel {
                 color: #D4D4D4;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
             }
+
+            /* ═══ LineEdit ═══ */
+            QLineEdit {
+                background-color: #3C3C3C;
+                color: #D4D4D4;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+                min-height: 24px;
+            }
+            QLineEdit:focus {
+                border-color: #007ACC;
+            }
+            QLineEdit:disabled {
+                background-color: #2D2D2D;
+                color: #555555;
+                border-color: #3C3C3C;
+            }
+
+            /* ═══ GroupBox ═══ */
             QGroupBox {
                 color: #D4D4D4;
                 border: 1px solid #3C3C3C;
-                margin-top: 8px;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 12px;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 4px;
+                padding: 0 8px;
+                color: #999;
             }
+
+            /* ═══ Scrollbar ═══ */
             QScrollBar:vertical {
                 background-color: #1E1E1E;
-                width: 10px;
+                width: 12px;
                 border: none;
+                margin: 0;
             }
             QScrollBar::handle:vertical {
-                background-color: #555555;
-                min-height: 20px;
-                border-radius: 4px;
+                background-color: #555;
+                min-height: 30px;
+                border-radius: 6px;
+                margin: 2px;
             }
             QScrollBar::handle:vertical:hover {
-                background-color: #666666;
+                background-color: #666;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
+                height: 0;
             }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
                 background: none;
             }
             QScrollBar:horizontal {
                 background-color: #1E1E1E;
-                height: 10px;
+                height: 12px;
                 border: none;
             }
             QScrollBar::handle:horizontal {
-                background-color: #555555;
-                min-width: 20px;
-                border-radius: 4px;
+                background-color: #555;
+                min-width: 30px;
+                border-radius: 6px;
+                margin: 2px;
             }
             QScrollBar::handle:horizontal:hover {
-                background-color: #666666;
+                background-color: #666;
             }
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                width: 0px;
+                width: 0;
             }
             QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
                 background: none;
             }
+
+            /* ═══ Menu ═══ */
             QMenu {
-                background-color: #3C3C3C;
+                background-color: #333333;
                 color: #D4D4D4;
-                border: 1px solid #555555;
-                font-family: Consolas, 'Courier New', monospace;
-                font-size: 10pt;
+                border: 1px solid #505050;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 4px 24px 4px 12px;
+                border-radius: 4px;
             }
             QMenu::item:selected {
-                background-color: #264F78;
+                background-color: #007ACC;
+                color: #FFFFFF;
             }
-            QFileDialog, QDialog {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-            }
-            QLineEdit {
-                background-color: #3C3C3C;
-                color: #D4D4D4;
-                border: 1px solid #555555;
-                padding: 2px 6px;
-                font-family: Consolas, 'Courier New', monospace;
-                font-size: 10pt;
+            QMenu::separator {
+                height: 1px;
+                background-color: #444;
+                margin: 4px 8px;
             }
         """
         self.setStyleSheet(dark_qss)
@@ -370,8 +507,181 @@ class RTTView(QWidget):
         # Set default text color via palette (lower priority than QTextCharFormat, so ANSI colors will override)
         palette = self.txtMain.palette()
         palette.setColor(QtGui.QPalette.Text, QtGui.QColor('#D4D4D4'))
-        palette.setColor(QtGui.QPalette.Base, QtGui.QColor('#1E1E1E'))
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor('#252526'))
         self.txtMain.setPalette(palette)
+
+    def _buildStatusBar(self):
+        """Build bottom status bar with connection indicator and buddy."""
+        self._statusBar = QtWidgets.QWidget(self)
+        self._statusBar.setFixedHeight(28)
+        self._statusBar.setObjectName('statusBar')
+
+        hLayout = QtWidgets.QHBoxLayout(self._statusBar)
+        hLayout.setContentsMargins(10, 2, 10, 2)
+        hLayout.setSpacing(8)
+
+        # Buddy widget
+        self._buddy = QtWidgets.QLabel('●‿●', self._statusBar)
+        self._buddy.setFixedWidth(32)
+        self._buddy.setAlignment(Qt.AlignCenter)
+        self._buddy.setObjectName('buddy')
+        self._buddy.setStyleSheet("""
+            QLabel#buddy {
+                color: #777;
+                font-size: 12pt;
+            }
+        """)
+        self._buddy_state = 'idle'  # idle, connecting, connected, rx
+
+        hLayout.addWidget(self._buddy)
+
+        # Connection state LED
+        self._statusLED = QtWidgets.QLabel(self._statusBar)
+        self._statusLED.setObjectName('statusLED')
+        self._statusLED.setFixedSize(8, 8)
+        self._statusLED.setStyleSheet('background-color: #555; border-radius: 4px;')
+
+        # Status text
+        self._statusText = QtWidgets.QLabel('未连接', self._statusBar)
+        self._statusText.setObjectName('statusText')
+        self._statusText.setStyleSheet('color: #888; font-size: 9pt; font-family: Consolas, monospace;')
+
+        hLayout.addWidget(self._statusLED)
+        hLayout.addWidget(self._statusText)
+
+        # Spacer
+        spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        hLayout.addItem(spacer)
+
+        # RTT throughput indicator
+        self._statusRate = QtWidgets.QLabel('0 B/s', self._statusBar)
+        self._statusRate.setObjectName('statusRate')
+        self._statusRate.setStyleSheet('color: #777; font-size: 9pt; font-family: Consolas, monospace;')
+        self._statusRate.setAlignment(Qt.AlignRight)
+        hLayout.addWidget(self._statusRate)
+
+        # Add to bottom of main layout
+        self.vLayout.addWidget(self._statusBar)
+
+        # Buddy animation timer
+        self._buddy_timer = QtCore.QTimer(self)
+        self._buddy_timer.setInterval(2000)
+        self._buddy_timer.timeout.connect(self._animateBuddy)
+        self._buddy_timer.start()
+
+        # Status LED pulse timer (creates breathing effect)
+        self._led_pulse = QtCore.QTimer(self)
+        self._led_pulse.setInterval(1200)
+        self._led_pulse.timeout.connect(self._pulseLED)
+        self._led_on = False
+
+    def _buildAuthorLine(self):
+        """Build author credit line at bottom."""
+        self._authorBar = QtWidgets.QWidget(self)
+        self._authorBar.setFixedHeight(30)
+        self._authorBar.setObjectName('authorBar')
+        self._authorBar.setStyleSheet('background-color: #1E1E1E; border-top: 1px solid #333;')
+
+        hLayout = QtWidgets.QHBoxLayout(self._authorBar)
+        hLayout.setContentsMargins(12, 2, 12, 2)
+        hLayout.setSpacing(6)
+
+        # Small author logo image
+        self._authorImg = QtWidgets.QLabel(self._authorBar)
+        pixmap = QtGui.QPixmap('Image/8592b368969fcdd822d43a241c205f54.jpg').scaled(
+            24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self._authorImg.setPixmap(pixmap)
+        self._authorImg.setFixedSize(24, 24)
+
+        # Author text
+        self._authorText = QtWidgets.QLabel('作者：佩林的嵌入式日记', self._authorBar)
+        self._authorText.setStyleSheet('color: #555; font-size: 9pt; font-family: Consolas, monospace;')
+
+        # Spacer
+        spacer = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        hLayout.addWidget(self._authorImg)
+        hLayout.addWidget(self._authorText)
+        hLayout.addItem(spacer)
+
+        self.vLayout.addWidget(self._authorBar)
+
+    def _animateBuddy(self):
+        """Animate buddy based on current state."""
+        if self._buddy_state == 'idle':
+            faces = ['●‿●', '◠‿◠', '⊙‿⊙', '◉‿◉']
+            face = faces[self._buddy_timer.timeout_count % len(faces)] if hasattr(self._buddy_timer, 'timeout_count') else '●‿●'
+            if not hasattr(self._buddy_timer, 'timeout_count'):
+                self._buddy_timer.timeout_count = 0
+            self._buddy_timer.timeout_count += 1
+            self._buddy.setText(faces[self._buddy_timer.timeout_count % len(faces)])
+            self._buddy.setStyleSheet('QLabel#buddy { color: #666; font-size: 12pt; }')
+        elif self._buddy_state == 'connected':
+            faces = ['●‿●', '◠‿◠', '⊙‿⊙']
+            if not hasattr(self._buddy_timer, 'timeout_count'):
+                self._buddy_timer.timeout_count = 0
+            self._buddy_timer.timeout_count += 1
+            self._buddy.setText(faces[self._buddy_timer.timeout_count % len(faces)])
+            self._buddy.setStyleSheet('QLabel#buddy { color: #4CAF50; font-size: 12pt; }')
+        elif self._buddy_state == 'rx':
+            if not hasattr(self._buddy_timer, 'timeout_count'):
+                self._buddy_timer.timeout_count = 0
+            self._buddy_timer.timeout_count += 1
+            if self._buddy_timer.timeout_count % 2 == 0:
+                self._buddy.setText('◉‿◉')
+            else:
+                self._buddy.setText('●‿●')
+            self._buddy.setStyleSheet('QLabel#buddy { color: #81C784; font-size: 12pt; }')
+
+    def _pulseLED(self):
+        """Create a breathing pulse effect for the status LED when connected."""
+        if self._connected:
+            self._led_on = not self._led_on
+            if self._led_on:
+                self._statusLED.setStyleSheet('background-color: #66BB6A; border-radius: 4px;')
+            else:
+                self._statusLED.setStyleSheet('background-color: #4CAF50; border-radius: 4px;')
+
+    def _updateStatusBar(self, connected):
+        """Update status bar appearance based on connection state."""
+        if connected:
+            self._statusLED.setStyleSheet('background-color: #4CAF50; border-radius: 4px;')
+            self._statusText.setText('已连接')
+            self._statusText.setStyleSheet('color: #A8D8A8; font-size: 9pt; font-family: Consolas, monospace;')
+            self._statusBar.setStyleSheet('background-color: #1A2E1A;')
+            self._buddy_state = 'connected'
+            # Make button look "active/disconnecting"
+            self.btnOpen.setStyleSheet("""
+                QPushButton {
+                    background-color: #4A2A2A;
+                    color: #FF8888;
+                    border: 1px solid #6A3A3A;
+                    border-radius: 6px;
+                    padding: 6px 16px;
+                    font-family: Consolas, 'Courier New', monospace;
+                    font-size: 10pt;
+                    min-height: 26px;
+                }
+                QPushButton:hover {
+                    background-color: #5A3A3A;
+                    border-color: #8A4A4A;
+                }
+                QPushButton:pressed {
+                    background-color: #3A2020;
+                }
+            """)
+        else:
+            self._statusLED.setStyleSheet('background-color: #555; border-radius: 4px;')
+            self._statusText.setText('未连接')
+            self._statusText.setStyleSheet('color: #888; font-size: 9pt; font-family: Consolas, monospace;')
+            self._statusRate.setText('0 B/s')
+            self._statusBar.setStyleSheet('background-color: #252526;')
+            self._buddy_state = 'idle'
+            self._buddy.setText('●‿●')
+            self._buddy.setStyleSheet('QLabel#buddy { color: #777; font-size: 12pt; }')
+            # Restore connect button
+            self.btnOpen.setStyleSheet('')
+            self._led_on = False
 
     # ── ANSI Parser ──────────────────────────────────────────────
     # 256-color palette (indexes 16-231: 6x6x6 cube, 232-255: grayscale)
@@ -677,6 +987,7 @@ class RTTView(QWidget):
                 self.chkSave.setEnabled(False)
                 self.btnOpen.setText('关闭连接')
                 self._connected = True
+                self._updateStatusBar(True)
 
         else:
             if self.rcvfile and not self.rcvfile.closed:
@@ -692,6 +1003,7 @@ class RTTView(QWidget):
             self.chkSave.setEnabled(True)
             self.btnOpen.setText('打开连接')
             self._connected = False
+            self._updateStatusBar(False)
     
     def aUpRead(self):
         data = self.xlk.read_mem_U8(self.aUpAddr, ctypes.sizeof(RingBuffer))
@@ -835,6 +1147,16 @@ class RTTView(QWidget):
     
     def on_tmrRTT_timeout(self):
         self.tmrRTT_Cnt += 1
+
+        # Update throughput rate every ~500ms
+        if self._connected and self.tmrRTT_Cnt % 50 == 0:
+            rate = self._rx_bytes / 0.5  # bytes per second
+            if rate < 1024:
+                self._statusRate.setText(f'{rate:.0f} B/s')
+            else:
+                self._statusRate.setText(f'{rate/1024:.1f} KB/s')
+            self._rx_bytes = 0
+
         if self._connected:
             try:
                 if self.rtt_cb:
@@ -867,6 +1189,7 @@ class RTTView(QWidget):
 
             if rcvdbytes:
                 self.rtt_fail_count = 0  # reset failure counter on successful read
+                self._rx_bytes += len(rcvdbytes)
                 if self.rcvfile and not self.rcvfile.closed:
                     self.rcvfile.write(rcvdbytes.decode('latin-1'))
 

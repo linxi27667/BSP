@@ -1,2 +1,0 @@
-[2;33m[RTT] Heartbeat #800
-[0m

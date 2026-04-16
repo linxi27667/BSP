@@ -66,6 +66,8 @@ class RTTView(QWidget):
         
         uic.loadUi('RTTView.ui', self)
 
+        self.resize(960, 700)
+
         self.hWidget2.setVisible(False)
 
         self.tblVar.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
@@ -78,7 +80,7 @@ class RTTView(QWidget):
         self.initQwtPlot()
 
         self.auto_scroll = True
-        self.txtMain_font_size = 10
+        self.txtMain_font_size = 14
         self.applyDarkTheme()
 
         self.rcvbuff = b''
@@ -104,8 +106,26 @@ class RTTView(QWidget):
         self.chkAutoScroll = QtWidgets.QCheckBox('自动滚动', self)
         self.chkAutoScroll.setChecked(True)
         self.chkAutoScroll.stateChanged.connect(self.on_chkAutoScroll_stateChanged)
-        # Place it near the existing controls in the bottom bar
         self.gLayout1.addWidget(self.chkAutoScroll, 0, 4, 1, 1)
+
+        # Modernize UI labels (keep Chinese)
+        self.setWindowTitle('RTTView - SEGGER RTT 查看器')
+        self.btnOpen.setText('打开连接')
+        self.btnClear.setText('清除显示')
+        self.btnDLL.setText('浏览')
+        self.btnAddr.setText('浏览')
+        self.btnFile.setText('浏览')
+        self.btnSend.setText('发送')
+        self.chkWave.setText('波形显示')
+        self.chkSave.setText('保存接收')
+        self.lblDLL.setText('接口：')
+        self.lblAddr.setText('地址：')
+        self.cmbICode.setToolTip('接收内容编码')
+        self.cmbOCode.setToolTip('发送内容编码')
+        self.cmbEnter.setToolTip('发送回车编码')
+
+        # Track connection state instead of relying on button text
+        self._connected = False
     
     def initSetting(self):
         if not os.path.exists('setting.ini'):
@@ -189,8 +209,14 @@ class RTTView(QWidget):
                 background-color: #1E1E1E;
                 border: 1px solid #3C3C3C;
                 font-family: Consolas, 'Courier New', monospace;
-                font-size: 10pt;
                 selection-background-color: #264F78;
+            }
+            QTextEdit#txtMain {
+                font-size: 14pt;
+                line-height: 1.2;
+            }
+            QTextEdit#txtSend {
+                font-size: 10pt;
             }
             QComboBox {
                 background-color: #3C3C3C;
@@ -347,123 +373,200 @@ class RTTView(QWidget):
         palette.setColor(QtGui.QPalette.Base, QtGui.QColor('#1E1E1E'))
         self.txtMain.setPalette(palette)
 
-    # ANSI SGR color codes mapping
-    _ansi_colors = {
-        30: '#808080',  # Black   -> gray (on dark bg)
-        31: '#FF6B6B',  # Red
-        32: '#6BCB6B',  # Green
-        33: '#FFD76B',  # Yellow
-        34: '#6B9FFF',  # Blue
-        35: '#D06BFF',  # Magenta
-        36: '#6BFFFF',  # Cyan
-        37: '#D4D4D4',  # White   -> light gray
-        90: '#555555',  # Bright Black
-        91: '#FF8888',  # Bright Red
-        92: '#88FF88',  # Bright Green
-        93: '#FFFF88',  # Bright Yellow
-        94: '#88BBFF',  # Bright Blue
-        95: '#FF88FF',  # Bright Magenta
-        96: '#88FFFF',  # Bright Cyan
-        97: '#FFFFFF',  # Bright White
-    }
+    # ── ANSI Parser ──────────────────────────────────────────────
+    # 256-color palette (indexes 16-231: 6x6x6 cube, 232-255: grayscale)
+    _ansi_16 = [
+        (0, 0, 0),       (197, 15, 31),   (19, 161, 14),   (193, 156, 0),
+        (0, 55, 218),    (136, 23, 152),  (58, 150, 221),  (204, 204, 204),
+        (118, 118, 118), (231, 72, 86),   (22, 198, 12),   (249, 241, 165),
+        (59, 120, 255),  (180, 0, 158),   (97, 214, 214),  (255, 255, 255),
+    ]
+    _palette256 = list(_ansi_16)
+    for r in (0, 95, 135, 175, 215, 255):
+        for g in (0, 95, 135, 175, 215, 255):
+            for b in (0, 95, 135, 175, 215, 255):
+                _palette256.append((r, g, b))
+    for i in range(24):
+        v = 8 + i * 10
+        _palette256.append((v, v, v))
 
-    def _insert_ansi_colored_text(self, text):
-        """Parse ANSI SGR escape sequences and insert colored text using QTextCharFormat.
-
-        Handles sequences like: ESC[31;2m (red), ESC[36;2m (cyan), ESC[0m (reset), etc.
-        Uses QTextCursor.insertText() with character format for reliable color rendering.
-        """
+    def _render_ansi_text(self, text):
+        """Full ANSI parser: converts ANSI escapes to HTML spans for reliable color rendering."""
         if not text:
             return
 
-        # State machine: parse text and track current color
-        spans = []  # list of (color_hex_str, plain_text) tuples
-        current_color = None
-        i = 0
-        n = len(text)
-        current_text = []
+        self._ansi_clear = False
+        encoded = text.encode('utf-8', errors='replace')
+        spans = self._parse_ansi(encoded)
 
-        while i < n:
-            if text[i] == '\x1b' and i + 1 < n and text[i + 1] == '[':
-                if current_text:
-                    spans.append((current_color, ''.join(current_text)))
-                    current_text = []
-
-                i += 2  # skip ESC + '['
-                params = []
-                param_buf = ''
-                found_terminator = False
-                while i < n:
-                    c = text[i]
-                    if c.isdigit():
-                        param_buf += c
-                    elif c == ';':
-                        if param_buf:
-                            params.append(int(param_buf))
-                            param_buf = ''
-                    elif c.isalpha():
-                        if param_buf:
-                            params.append(int(param_buf))
-                        cmd = c
-                        found_terminator = True
-                        i += 1
-                        break
-                    else:
-                        break
-                    i += 1
-
-                if not found_terminator:
-                    # Incomplete sequence (split across chunks), keep for next time
-                    current_text.append('\x1b[')
-                    continue
-
-                # Process SGR parameters (only for 'm' terminator)
-                if cmd == 'm':
-                    if not params:
-                        current_color = None
-                    else:
-                        for p in params:
-                            if p == 0:
-                                current_color = None
-                            elif 30 <= p <= 37:
-                                current_color = self._ansi_colors.get(p, '#D4D4D4')
-                            elif 90 <= p <= 97:
-                                current_color = self._ansi_colors.get(p, '#D4D4D4')
-                            elif p == 38:
-                                idx = params.index(38)
-                                if idx + 2 < len(params):
-                                    c256 = params[idx + 2]
-                                    current_color = self._ansi_colors.get(c256, '#D4D4D4')
-                continue
-
-            current_text.append(text[i])
-            i += 1
-
-        if current_text:
-            spans.append((current_color, ''.join(current_text)))
-
+        if self._ansi_clear:
+            self.txtMain.clear()
         if not spans:
             return
 
-        # Insert using QTextCharFormat and setTextCursor to ensure widget updates
+        # Build HTML from spans
+        html_parts = []
+        for txt, fmt in spans:
+            escaped = txt.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            lines = escaped.split('\n')
+            for idx, line in enumerate(lines):
+                if idx > 0:
+                    html_parts.append('<br>')
+                if not line:
+                    continue
+                style_parts = []
+                if fmt.get('fg'):
+                    r, g, b = fmt['fg']
+                    style_parts.append(f'color:#{r:02X}{g:02X}{b:02X}')
+                if fmt.get('bg'):
+                    r, g, b = fmt['bg']
+                    style_parts.append(f'background-color:#{r:02X}{g:02X}{b:02X}')
+                if fmt.get('bold'):
+                    style_parts.append('font-weight:bold')
+                if fmt.get('italic'):
+                    style_parts.append('font-style:italic')
+                if style_parts:
+                    html_parts.append(f'<span style="{";".join(style_parts)}">{line}</span>')
+                else:
+                    html_parts.append(line)
+
+        html = ''.join(html_parts)
+
         cursor = self.txtMain.textCursor()
+        cursor.beginEditBlock()
         cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertHtml(html)
+        cursor.endEditBlock()
 
-        for color, txt in spans:
-            fmt = QtGui.QTextCharFormat()
-            if color:
-                fmt.setForeground(QtGui.QColor(color))
-            else:
-                fmt.setForeground(QtGui.QColor('#D4D4D4'))
-            cursor.insertText(txt, fmt)
-
-        self.txtMain.setTextCursor(cursor)
-
-        # Auto-scroll
         if self.auto_scroll:
             self.txtMain.verticalScrollBar().setValue(
                 self.txtMain.verticalScrollBar().maximum()
             )
+
+    def _parse_ansi(self, data: bytes) -> list:
+        """State-machine parser yielding (text, format_dict) pairs.
+
+        format_dict keys: 'fg' (r,g,b), 'bg' (r,g,b), 'bold' (bool), 'italic' (bool)
+        """
+        results = []
+        text_buf = []
+        bold = False
+        italic = False
+        fg = None
+        bg = None
+
+        def _make_fmt():
+            return dict(fg=fg, bg=bg, bold=bold, italic=italic)
+
+        def _color256(n):
+            n = max(0, min(255, n))
+            return self._palette256[n]
+
+        def _parse_sgr(params):
+            nonlocal bold, italic, fg, bg
+            if not params:
+                params = [0]
+            # Check if this is a mixed sequence like [36;0m where 0 shouldn't fully reset
+            has_color = any(30 <= p <= 37 or 90 <= p <= 97 or p in (38, 48)
+                           or 40 <= p <= 47 or 100 <= p <= 107 for p in params)
+            has_zero = 0 in params
+            i = 0
+            while i < len(params):
+                code = params[i]
+                if code == 0:
+                    # In mixed sequences like [36;0m, firmware uses 0 as "normal style"
+                    # not full reset. Only full-reset when 0 is alone.
+                    if has_color and has_zero:
+                        bold = False; italic = False  # keep fg/bg
+                    else:
+                        bold = False; italic = False; fg = None; bg = None
+                elif code == 1:
+                    bold = True
+                elif code == 2:
+                    bold = False  # dim
+                elif code == 3:
+                    italic = True
+                elif 30 <= code <= 37:
+                    fg = self._ansi_16[code - 30]
+                elif 90 <= code <= 97:
+                    fg = self._ansi_16[code - 90 + 8]
+                elif code == 38:
+                    if i + 1 < len(params):
+                        if params[i + 1] == 5 and i + 2 < len(params):
+                            fg = _color256(params[i + 2]); i += 2
+                        elif params[i + 1] == 2 and i + 4 < len(params):
+                            fg = (params[i + 2], params[i + 3], params[i + 4]); i += 4
+                elif 40 <= code <= 47:
+                    bg = self._ansi_16[code - 40]
+                elif 100 <= code <= 107:
+                    bg = self._ansi_16[code - 100 + 8]
+                elif code == 48:
+                    if i + 1 < len(params):
+                        if params[i + 1] == 5 and i + 2 < len(params):
+                            bg = _color256(params[i + 2]); i += 2
+                        elif params[i + 1] == 2 and i + 4 < len(params):
+                            bg = (params[i + 2], params[i + 3], params[i + 4]); i += 4
+                i += 1
+
+        def _flush():
+            if text_buf:
+                results.append((''.join(text_buf), _make_fmt()))
+                text_buf.clear()
+
+        state = 0  # 0=normal, 1=ESC, 2=CSI
+        csi_buf = ''
+
+        for byte_val in data:
+            if state == 0:
+                if byte_val == 0x1B:
+                    _flush(); state = 1; csi_buf = ''
+                elif byte_val == 0x0A:
+                    _flush(); results.append(('\n', _make_fmt()))
+                elif byte_val == 0x0D:
+                    pass  # discard \r, HTML uses <br> for line breaks only
+                elif byte_val >= 0x20:
+                    text_buf.append(chr(byte_val))
+            elif state == 1:
+                if byte_val == ord('['):
+                    state = 2; csi_buf = ''
+                elif byte_val == ord('J'):
+                    self._ansi_clear = True; state = 0
+                else:
+                    state = 0
+            elif state == 2:
+                if 0x30 <= byte_val <= 0x3F or 0x20 <= byte_val <= 0x2F:
+                    csi_buf += chr(byte_val)
+                elif 0x40 <= byte_val <= 0x7E:
+                    state = 0
+                    params = []
+                    if csi_buf:
+                        for part in csi_buf.split(';'):
+                            if part:
+                                try:
+                                    params.append(int(part))
+                                except ValueError:
+                                    params.append(0)
+                    if chr(byte_val) == 'm':
+                        _parse_sgr(params)
+                    elif chr(byte_val) == 'J':
+                        if not params or params[0] == 2:
+                            self._ansi_clear = True
+                else:
+                    state = 0
+
+        _flush()
+        return results
+
+    def _apply_timestamp(self, text):
+        """Prepend timestamp to text if chkTime is enabled."""
+        if self.chkTime.isChecked():
+            now = datetime.datetime.now()
+            ts = now.strftime('%H:%M:%S.') + f'{now.microsecond // 1000:03d}'
+            lines = text.split('\n')
+            if lines:
+                lines[0] = f'[{ts}] {lines[0]}'
+            return '\n'.join(lines)
+        return text
 
     def eventFilter(self, obj, event):
         """Handle Ctrl+wheel for font zoom in/out."""
@@ -495,7 +598,7 @@ class RTTView(QWidget):
     
     @pyqtSlot()
     def on_btnOpen_clicked(self):
-        if self.btnOpen.text() == '打开连接':
+        if not self._connected:
             mode = self.cmbMode.currentText()
             mode = mode.replace(' SWD', '').replace(' cJTAG', '').replace(' JTAG', 'J').lower()
             core = 'Cortex-M0' if mode.startswith('arm') else 'RISC-V'
@@ -573,6 +676,7 @@ class RTTView(QWidget):
                 self.cmbAddr.setEnabled(False)
                 self.chkSave.setEnabled(False)
                 self.btnOpen.setText('关闭连接')
+                self._connected = True
 
         else:
             if self.rcvfile and not self.rcvfile.closed:
@@ -587,6 +691,7 @@ class RTTView(QWidget):
             self.cmbAddr.setEnabled(True)
             self.chkSave.setEnabled(True)
             self.btnOpen.setText('打开连接')
+            self._connected = False
     
     def aUpRead(self):
         data = self.xlk.read_mem_U8(self.aUpAddr, ctypes.sizeof(RingBuffer))
@@ -730,7 +835,7 @@ class RTTView(QWidget):
     
     def on_tmrRTT_timeout(self):
         self.tmrRTT_Cnt += 1
-        if self.btnOpen.text() == '关闭连接':
+        if self._connected:
             try:
                 if self.rtt_cb:
                     rcvdbytes = self.aUpRead()
@@ -863,8 +968,8 @@ class RTTView(QWidget):
                                 break
 
                     if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
-                    # Use ANSI color rendering for text output
-                    self._insert_ansi_colored_text(text)
+                    text = self._apply_timestamp(text)
+                    self._render_ansi_text(text)
 
         else:
             if self.tmrRTT_Cnt % 100 == 1:
@@ -880,7 +985,7 @@ class RTTView(QWidget):
 
     @pyqtSlot()
     def on_btnSend_clicked(self):
-        if self.btnOpen.text() == '关闭连接':
+        if self._connected:
             text = self.txtSend.toPlainText()
 
             if self.cmbOCode.currentText() == 'HEX':
@@ -1006,7 +1111,7 @@ class RTTView(QWidget):
 
     @pyqtSlot(int, int)
     def on_tblVar_cellDoubleClicked(self, row, column):
-        if self.btnOpen.text() == '关闭连接': return
+        if self._connected: return
 
         if column < 3:
             dlg = VarDialog(self, row)

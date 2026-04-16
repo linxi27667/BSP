@@ -867,6 +867,214 @@ class RTTView(QWidget):
         _flush()
         return results
 
+    def _process_rtt_bytes(self, data: bytes, encoding: str):
+        """Process raw RTT bytes: extract ANSI codes mapped to text positions.
+
+        Returns (text_str, [(code_str, text_pos), ...]) where each ANSI code
+        is paired with the byte position of the text it formats.
+        """
+        if not data:
+            return '', []
+
+        # Step 1: find ANSI sequence boundaries
+        boundaries = []
+        i = 0
+        while i < len(data):
+            if data[i] == 0x1B:
+                seq_start = i
+                i += 1
+                if i < len(data) and data[i] == ord('['):
+                    i += 1
+                    while i < len(data) and data[i] != ord('m'):
+                        i += 1
+                    if i < len(data):
+                        i += 1
+                boundaries.append((seq_start, i))
+            else:
+                i += 1
+
+        # Step 2: build chunks and track text byte positions for codes
+        chunks = []
+        prev = 0
+        for (s, e) in boundaries:
+            if s > prev:
+                chunks.append((data[prev:s], None))
+            chunks.append((None, data[s:e]))
+            prev = e
+        if prev < len(data):
+            chunks.append((data[prev:], None))
+
+        # Step 3: decode text chunks, collect codes with text positions
+        text_parts = []
+        code_list = []
+        text_byte_pos = 0  # running byte position in decoded text
+
+        for (t, a) in chunks:
+            if a is not None:
+                # Code comes BEFORE the next text, so map it to current text_byte_pos
+                code_list.append((a.decode('ascii', errors='ignore'), text_byte_pos))
+            if t is not None:
+                decoded = ''
+                j = 0
+                while j < len(t):
+                    for span in range(min(4, len(t) - j), 0, -1):
+                        try:
+                            chunk = t[j:j+span]
+                            decoded += chunk.decode(encoding)
+                            text_byte_pos += len(chunk)
+                            j += span
+                            break
+                        except UnicodeDecodeError:
+                            if span == 1:
+                                decoded += chr(t[j])
+                                text_byte_pos += 1
+                                j += 1
+                text_parts.append(decoded)
+
+        return ''.join(text_parts), code_list
+
+    def _render_ansi_codes(self, text, code_list):
+        """Render text with pre-extracted ANSI codes mapped to text positions.
+
+        Two-pass approach: record format at each byte position, then group
+        consecutive bytes with same format into HTML spans.
+        """
+        if not text:
+            return
+
+        self._ansi_clear = False
+        encoded = text.encode('utf-8', errors='replace')
+
+        # Parse codes into (text_byte_position, params_list)
+        sgr_entries = []
+        for (code_str, text_pos) in code_list:
+            if len(code_str) >= 2 and code_str[0] == '\x1b' and code_str[1] == '[':
+                inner = code_str[2:-1] if code_str.endswith('m') else code_str[2:]
+                params = []
+                if inner:
+                    for part in inner.split(';'):
+                        if part:
+                            try:
+                                params.append(int(part))
+                            except ValueError:
+                                params.append(0)
+                sgr_entries.append((text_pos, params))
+
+        # Pass 1: walk bytes, record format at each byte position
+        bold, italic, fg, bg = False, False, None, None
+        byte_formats = [None] * len(encoded)
+        sgr_idx = 0
+
+        def _color256(n):
+            n = max(0, min(255, n))
+            return self._palette256[n]
+
+        def _parse_sgr(params):
+            nonlocal bold, italic, fg, bg
+            if not params:
+                params = [0]
+            has_color = any(30 <= p <= 37 or 90 <= p <= 97 or p in (38, 48)
+                           or 40 <= p <= 47 or 100 <= p <= 107 for p in params)
+            has_zero = 0 in params
+            i = 0
+            while i < len(params):
+                code = params[i]
+                if code == 0:
+                    if has_color and has_zero:
+                        bold = False; italic = False
+                    else:
+                        bold = False; italic = False; fg = None; bg = None
+                elif code == 1:
+                    bold = True
+                elif code == 2:
+                    bold = False
+                elif code == 3:
+                    italic = True
+                elif 30 <= code <= 37:
+                    fg = self._ansi_16[code - 30]
+                elif 90 <= code <= 97:
+                    fg = self._ansi_16[code - 90 + 8]
+                elif code == 38:
+                    if i + 1 < len(params):
+                        if params[i + 1] == 5 and i + 2 < len(params):
+                            fg = _color256(params[i + 2]); i += 2
+                        elif params[i + 1] == 2 and i + 4 < len(params):
+                            fg = (params[i + 2], params[i + 3], params[i + 4]); i += 4
+                elif 40 <= code <= 47:
+                    bg = self._ansi_16[code - 40]
+                elif 100 <= code <= 107:
+                    bg = self._ansi_16[code - 100 + 8]
+                elif code == 48:
+                    if i + 1 < len(params):
+                        if params[i + 1] == 5 and i + 2 < len(params):
+                            bg = _color256(params[i + 2]); i += 2
+                        elif params[i + 1] == 2 and i + 4 < len(params):
+                            bg = (params[i + 2], params[i + 3], params[i + 4]); i += 4
+                i += 1
+
+        for byte_idx, byte_val in enumerate(encoded):
+            while sgr_idx < len(sgr_entries) and sgr_entries[sgr_idx][0] <= byte_idx:
+                _parse_sgr(sgr_entries[sgr_idx][1])
+                sgr_idx += 1
+            byte_formats[byte_idx] = (fg, bg, bold, italic)
+
+        # Pass 2: group consecutive bytes with same format into HTML spans
+        html_parts = []
+        i = 0
+        while i < len(encoded):
+            bv = encoded[i]
+            if bv == 0x0A:
+                html_parts.append('<br>')
+                i += 1
+                continue
+            elif bv == 0x0D or bv < 0x20:
+                i += 1
+                continue
+
+            fmt = byte_formats[i]
+            start = i
+            while i < len(encoded) and byte_formats[i] == fmt:
+                bv2 = encoded[i]
+                if bv2 == 0x0A or bv2 == 0x0D or bv2 < 0x20:
+                    break
+                i += 1
+
+            if i > start:
+                chars = ''.join(chr(b) for b in encoded[start:i])
+                escaped = chars.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                f_fg, f_bg, f_bold, f_italic = fmt
+                style_parts = []
+                if f_fg is not None:
+                    r, g, b = f_fg
+                    style_parts.append(f'color:#{r:02X}{g:02X}{b:02X}')
+                if f_bg is not None:
+                    r, g, b = f_bg
+                    style_parts.append(f'background-color:#{r:02X}{g:02X}{b:02X}')
+                if f_bold:
+                    style_parts.append('font-weight:bold')
+                if f_italic:
+                    style_parts.append('font-style:italic')
+                if style_parts:
+                    html_parts.append(f'<span style="{";".join(style_parts)}">{escaped}</span>')
+                else:
+                    html_parts.append(escaped)
+
+        if not html_parts:
+            return
+
+        html = ''.join(html_parts)
+
+        cursor = self.txtMain.textCursor()
+        cursor.beginEditBlock()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertHtml(html)
+        cursor.endEditBlock()
+
+        if self.auto_scroll:
+            self.txtMain.verticalScrollBar().setValue(
+                self.txtMain.verticalScrollBar().maximum()
+            )
+
     def _apply_timestamp(self, text):
         """Prepend timestamp to text if chkTime is enabled."""
         if self.chkTime.isChecked():
@@ -1239,60 +1447,27 @@ class RTTView(QWidget):
                             print(e)
 
                 else:
-                    text = ''
-                    if self.cmbICode.currentText() == 'ASCII':
+                    encoding = self.cmbICode.currentText()
+                    if encoding == 'ASCII':
                         text = ''.join([chr(x) for x in self.rcvbuff])
                         self.rcvbuff = b''
+                        if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
+                        text = self._apply_timestamp(text)
+                        self._render_ansi_text(text)
 
-                    elif self.cmbICode.currentText() == 'HEX':
+                    elif encoding == 'HEX':
                         text = ' '.join([f'{x:02X}' for x in self.rcvbuff]) + ' '
                         self.rcvbuff = b''
+                        if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
+                        self.txtMain.append(text)
 
-                    elif self.cmbICode.currentText() == 'GBK':
-                        while len(self.rcvbuff):
-                            if self.rcvbuff[0:1].decode('GBK', 'ignore'):
-                                text += self.rcvbuff[0:1].decode('GBK')
-                                self.rcvbuff = self.rcvbuff[1:]
-
-                            elif len(self.rcvbuff) > 1 and self.rcvbuff[0:2].decode('GBK', 'ignore'):
-                                text += self.rcvbuff[0:2].decode('GBK')
-                                self.rcvbuff = self.rcvbuff[2:]
-
-                            elif len(self.rcvbuff) > 1:
-                                text += chr(self.rcvbuff[0])
-                                self.rcvbuff = self.rcvbuff[1:]
-
-                            else:
-                                break
-
-                    elif self.cmbICode.currentText() == 'UTF-8':
-                        while len(self.rcvbuff):
-                            if self.rcvbuff[0:1].decode('UTF-8', 'ignore'):
-                                text += self.rcvbuff[0:1].decode('UTF-8')
-                                self.rcvbuff = self.rcvbuff[1:]
-
-                            elif len(self.rcvbuff) > 1 and self.rcvbuff[0:2].decode('UTF-8', 'ignore'):
-                                text += self.rcvbuff[0:2].decode('UTF-8')
-                                self.rcvbuff = self.rcvbuff[2:]
-
-                            elif len(self.rcvbuff) > 2 and self.rcvbuff[0:3].decode('UTF-8', 'ignore'):
-                                text += self.rcvbuff[0:3].decode('UTF-8')
-                                self.rcvbuff = self.rcvbuff[3:]
-
-                            elif len(self.rcvbuff) > 3 and self.rcvbuff[0:4].decode('UTF-8', 'ignore'):
-                                text += self.rcvbuff[0:4].decode('UTF-8')
-                                self.rcvbuff = self.rcvbuff[4:]
-
-                            elif len(self.rcvbuff) > 3:
-                                text += chr(self.rcvbuff[0])
-                                self.rcvbuff = self.rcvbuff[1:]
-
-                            else:
-                                break
-
-                    if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
-                    text = self._apply_timestamp(text)
-                    self._render_ansi_text(text)
+                    else:
+                        # GBK or UTF-8: process bytes to preserve ANSI codes
+                        text, code_list = self._process_rtt_bytes(self.rcvbuff, encoding)
+                        self.rcvbuff = b''
+                        if len(self.txtMain.toPlainText()) > 25000: self.txtMain.clear()
+                        text = self._apply_timestamp(text)
+                        self._render_ansi_codes(text, code_list)
 
         else:
             if self.tmrRTT_Cnt % 100 == 1:

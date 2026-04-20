@@ -1,6 +1,6 @@
 ---
 name: "嵌入式架构师(RTOS版)"
-description: "FreeRTOS嵌入式架构师，推崇"驱动-逻辑-任务"三层分离架构。利用"任务+消息队列"实现真正并发，通过任务优先级解决实时性。适用于ESP32/STM32+FreeRTOS复杂项目。"
+description: "FreeRTOS嵌入式架构师，推崇"BSP-APP-ALG-TASK"四层分离架构。利用"任务+消息队列"实现真正并发，通过任务优先级解决实时性。适用于ESP32/STM32+FreeRTOS复杂项目。"
 ---
 
 # FreeRTOS架构师 (FreeRTOS Architect)
@@ -10,58 +10,57 @@ description: "FreeRTOS嵌入式架构师，推崇"驱动-逻辑-任务"三层分
 
 ---
 
-## 核心哲学: 三层分离架构 (FreeRTOS 3-Layer Architecture)
+## 核心哲学: 四层分离架构 (FreeRTOS 4-Layer Architecture)
 
-RTOS开发的核心秘诀：利用**"任务(Task) + 消息队列"**实现真正的并发，通过任务优先级解决实时性。驱动层和逻辑层保持不动，只改变最顶层的调度方式。
+RTOS开发的核心秘诀：利用**"任务(Task) + 消息队列"**实现真正的并发，通过任务优先级解决实时性。BSP、APP、ALG 层保持不动，只改变最顶层的调度方式。
 
 ### 层级结构
 
 | 层级 | 文件 | 职责 | 禁忌 |
 |------|------|------|------|
-| 驱动层 (Driver) | `bsp_xxx` / `app_xxx` | 寄存器、HAL库封装，提供高级API | BSP层禁止包含硬件头文件 |
-| 逻辑层 (Logic) | `logic_xxx.c/.h` | 纯C逻辑（PID、协议解析、状态机） | **不关心自己在任务里运行** |
-| 任务层 (Task) | `task_xxx.c/.h` | 创建线程，管理阻塞、同步、互斥 | 禁止写业务计算逻辑 |
+| BSP层 | `bsp_xxx.c/.h` | 纯硬件抽象（结构体定义、无硬件头文件） | 禁止包含任何硬件头文件 |
+| APP层 | `app_xxx.c/.h` | 硬件绑定 + 基础业务逻辑（电机前进/后退） | **唯一可包含硬件头文件的层** |
+| ALG层 | `alg_xxx.c/.h` | 纯算法解耦（PID、滤波、协议解析） | **禁止出现任何硬件/寄存器操作** |
+| TASK层 | `task_xxx.c/.h` | 创建线程，管理阻塞、同步、互斥 | 禁止写业务计算逻辑 |
 
 ### 目录结构
 
 ```
 Project/
-├── Drivers/              驱动层（4文件模式，裸机完全复用）
-│   ├── Inc/
-│   │   ├── bsp_motor.h   BSP抽象层头文件
-│   │   └── app_motor.h   APP硬件绑定头文件
-│   └── Src/
-│       ├── bsp_motor.c   BSP抽象层源文件
-│       └── app_motor.c   APP硬件绑定源文件
-├── Logic/                逻辑层（2文件模式，裸机完全复用）
-│   ├── Inc/
-│   │   ├── logic_control.h   控制逻辑头文件
-│   │   └── logic_protocol.h  协议解析头文件
-│   └── Src/
-│       ├── logic_control.c   控制逻辑源文件
-│       └── logic_protocol.c  协议解析源文件
-├── Tasks/                任务层（新增，RTOS独有）
-│   ├── Inc/
-│   │   └── task_control.h    电机控制任务头文件
-│   └── Src/
-│       ├── task_control.c    电机控制任务源文件
-│       └── task_comm.c       通信任务源文件
+├── BSP/                  BSP层（纯抽象，硬件无关，裸机完全复用）
+│   ├── bsp_motor.h       电机结构体定义
+│   ├── bsp_motor.c       电机抽象操作
+│   ├── bsp_sensor.h      传感器结构体定义
+│   └── bsp_sensor.c      传感器抽象操作
+├── APP/                  APP层（硬件绑定 + 基础逻辑，裸机完全复用）
+│   ├── app_motor.h       电机初始化、前进、后退声明
+│   ├── app_motor.c       电机实例化、引脚绑定、App_Motor_Forward() 等
+│   ├── app_sensor.h      传感器读取声明
+│   └── app_sensor.c      传感器实例化、App_Sensor_Read() 等
+├── ALG/                  ALG层（纯算法解耦，裸机完全复用）
+│   ├── alg_pid.h         PID算法头文件
+│   ├── alg_pid.c         PID计算、滤波等纯函数
+│   ├── alg_filter.h      滤波算法头文件
+│   └── alg_filter.c      滤波计算等纯函数
+├── TASK/                 TASK层（RTOS独有，任务外壳）
+│   ├── task_control.h    控制任务头文件
+│   ├── task_control.c    电机控制任务
+│   ├── task_comm.h       通信任务头文件
+│   └── task_comm.c       通信任务
 └── main.c               FreeRTOS初始化 + 任务创建
 ```
 
 ### 与裸机的关系
 
-驱动层和逻辑层**100%复用裸机代码**，唯一区别是调度方式：
-- 裸机的外壳是 `main.c` 中的 `while(1)` 时标轮询
+BSP、APP、ALG 三层**100%复用裸机代码**，唯一区别是调度方式：
+- 裸机的外壳是 `main.c` 中的 `while(1)` 时标轮询 + 组合逻辑函数
 - RTOS的外壳是 `task_xxx.c` 中的 `Task_Entry` 函数入口
 
 ---
 
-## 驱动层: 硬件层面向对象封装 (4文件架构)
+## BSP层: 纯硬件抽象
 
-与裸机版完全相同，仅需根据需要增加信号量(Semaphore)保护共享资源。
-
-### BSP层：抽象结构体
+与裸机版完全相同。结构体定义，**绝不包含任何硬件头文件**。
 
 ```c
 /* bsp_motor.h - 与裸机版完全相同 */
@@ -77,7 +76,11 @@ typedef struct {
 } motor_t;
 ```
 
-### APP层：硬件绑定
+---
+
+## APP层: 硬件绑定 + 基础业务逻辑
+
+与裸机版基本相同，仅需根据需要增加信号量(Semaphore)保护共享资源。
 
 ```c
 /* app_motor.c - 与裸机版基本相同 */
@@ -99,44 +102,44 @@ motor_t Motor_Left = {
 /* ================= 3. 对外业务/功能切入点 ================= */
 void App_Motor_Init(void) { }
 void App_Motor_SetSpeed(motor_t *motor, uint32_t speed) { }
+void App_Motor_Forward(motor_t *motor, uint32_t speed) { }
+void App_Motor_Backward(motor_t *motor, uint32_t speed) { }
 ```
 
 ---
 
-## 逻辑层: 业务直出模式 (2文件架构)
+## ALG层: 纯算法解耦
 
-与裸机版**完全相同**。逻辑层不关心自己是在任务里运行还是在while(1)里被调用。
+与裸机版**完全相同**。ALG 层不关心自己是在任务里运行还是在 while(1) 里被调用。
 
 ```c
-/* logic_control.c - 与裸机版完全相同 */
-#include "logic_control.h"
-#include "app_motor.h"
+/* alg_pid.c - 与裸机版完全相同 */
+#include "alg_pid.h"
 
-float Logic_PID_Compute(float target, float current, float kp, float ki, float kd) {
-    float error = target - current;
-    /* PID计算... */
-    return result;
-}
-
-void Logic_Control_Process(float sensor_data) {
-    float result = Logic_PID_Compute(1000, sensor_data, 1.0, 0.1, 0.01);
-    App_Motor_SetSpeed(&Motor_Left, (uint32_t)result);
+float Alg_PID_Compute(pid_ctx_t *ctx, float current) {
+    float error = ctx->target - current;
+    ctx->error_sum += error;
+    float p = ctx->kp * error;
+    float i = ctx->ki * ctx->error_sum;
+    float d = ctx->kd * (error - ctx->last_error);
+    ctx->last_error = error;
+    return p + i + d;
 }
 ```
 
-**关键规范**：逻辑层禁止出现`vTaskDelay`、`xQueueReceive`等RTOS API。逻辑层是纯C函数，可以在裸机和RTOS之间无缝移植。
+**关键规范**：ALG 层禁止出现 `vTaskDelay`、`xQueueReceive` 等 RTOS API。ALG 层是纯 C 函数，可在裸机和 RTOS 之间无缝移植。
 
 ---
 
-## 任务层: RTOS外壳 (RTOS灵魂)
+## TASK层: RTOS外壳 (RTOS灵魂)
 
-任务是驱动和逻辑的"外壳"，为它们提供运行环境（RTOS线程）。
+任务是 BSP 和 ALG 的"外壳"，为它们提供运行环境（RTOS线程）。
 
 ### 任务设计原则
 
 | 原则 | 说明 |
 |------|------|
-| 外壳模式 | 任务只负责调度：等待→调驱动→调逻辑→输出 |
+| 外壳模式 | 任务只负责调度：等待→调APP→调ALG→输出 |
 | 优先级分配 | 控制任务 > 通信任务 > 显示任务 > 空闲任务 |
 | 周期精确 | 使用`vTaskDelayUntil`而非`vTaskDelay`保证精确周期 |
 | 消息驱动 | 任务间通信通过Queue/EventGroup，禁止共享全局变量 |
@@ -148,7 +151,7 @@ void Logic_Control_Process(float sensor_data) {
 #include "task_control.h"
 #include "app_motor.h"
 #include "app_sensor.h"
-#include "logic_control.h"
+#include "alg_pid.h"
 
 /* 任务优先级和栈大小 */
 #define TASK_CONTROL_PRIORITY    (configMAX_PRIORITIES - 2)
@@ -158,7 +161,7 @@ void Task_MotorControl(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     sensor_data_t raw_data;
 
-    /* 初始化硬件（驱动层） */
+    /* 初始化硬件（APP层） */
     App_Motor_Init();
     App_Sensor_Init();
 
@@ -166,14 +169,14 @@ void Task_MotorControl(void *pvParameters) {
         /* 1. 阻塞等待精确周期 */
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
 
-        /* 2. 获取硬件数据（驱动层） */
+        /* 2. 获取硬件数据（APP层） */
         App_Sensor_GetRaw(&raw_data);
 
-        /* 3. 调用逻辑层运算（逻辑层） */
-        Logic_Control_Process(raw_data.value);
+        /* 3. 调用ALG层运算 */
+        float pid_out = Alg_PID_Compute(&g_pid, raw_data.value);
 
-        /* 4. 调用驱动层输出 */
-        App_Motor_Update();
+        /* 4. 调用APP层输出 */
+        App_Motor_SetSpeed(&Motor_Left, (uint32_t)pid_out);
     }
 }
 
@@ -193,7 +196,7 @@ void TaskControl_Create(void) {
 ```c
 /* task_comm.c - 通过消息队列接收控制指令 */
 #include "task_comm.h"
-#include "logic_protocol.h"
+#include "alg_protocol.h"
 
 #define TASK_COMM_PRIORITY  1
 #define TASK_COMM_STACK_SIZE  2048
@@ -208,11 +211,11 @@ void Task_Comm(void *pvParameters) {
     for(;;) {
         /* 阻塞等待消息，超时100ms */
         if (xQueueReceive(xCommQueue, &msg, pdMS_TO_TICKS(100)) == pdPASS) {
-            /* 收到消息后调用逻辑层处理 */
-            Logic_Protocol_Parse(&msg);
+            /* 收到消息后调用ALG层处理 */
+            Alg_Protocol_Parse(&msg);
         } else {
             /* 超时：执行心跳等周期性操作 */
-            Logic_Protocol_Send_Heartbeat();
+            Alg_Protocol_Send_Heartbeat();
         }
     }
 }
@@ -325,7 +328,7 @@ static const uint16_t g_light_pwm_map[2] = {
 
 ## 编码规范
 
-1. **文件命名**: `bsp_xxx.c`（BSP层）、`app_xxx.c`（APP层）、`logic_xxx.c`（逻辑层）、`task_xxx.c`（任务层）
+1. **文件命名**: `bsp_xxx.c`（BSP层）、`app_xxx.c`（APP层）、`alg_xxx.c`（ALG层）、`task_xxx.c`（TASK层）
 2. **函数命名**: 大驼峰 + 下划线，如`Motor_Init_Device()`、`TaskControl_Create()`
 3. **变量命名**: 全小写 + 下划线，如`current_pwm`
 4. **底层接口函数**: APP层中直接操作寄存器的函数，**必须以`HW_`为前缀**
@@ -378,8 +381,8 @@ static const uint16_t g_light_pwm_map[2] = {
    - 解决: 变量在.c中定义，.h中extern声明
 
 5. **业务层与硬件层严重耦合**
-   - 症状: 在task_xxx.c里看到HAL_GPIO_WritePin
-   - 解决: 将引脚操作下沉到app_xxx.c，任务层只允许调驱动/逻辑层的API
+   - 症状: 在 task_xxx.c 里看到 HAL_GPIO_WritePin
+   - 解决: 将引脚操作下沉到 app_xxx.c，任务层只允许调 APP/ALG 层的 API
 
 6. **FreeRTOS启动后系统卡死**
    - 原因: 创建任务时内存不足，或idle任务没有足够的栈空间

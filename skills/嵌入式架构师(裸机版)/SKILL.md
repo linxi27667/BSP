@@ -74,7 +74,7 @@ int main(void) {
         if (Timer_10ms_Flag) {
             Timer_10ms_Flag = 0;
             sensor_data_t raw_data = App_Sensor_Read(&Sensor_1);
-            float pid_out = Alg_PID_Compute(&g_pid, raw_data);
+            float pid_out = Alg_Pid_Compute(&g_pid, raw_data);
             App_Motor_SetSpeed(&Motor_Left, (uint32_t)pid_out);
         }
 
@@ -147,7 +147,7 @@ void App_Motor_Backward(motor_t *motor, uint32_t speed) { }
 /* alg_pid.c - 纯算法，禁止硬件操作 */
 #include "alg_pid.h"
 
-float Alg_PID_Compute(pid_ctx_t *ctx, float current) {
+float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
     float error = ctx->target - current;
     ctx->error_sum += error;
     float p = ctx->kp * error;
@@ -188,7 +188,7 @@ int main(void) {
         if (Timer_10ms_Flag) {
             Timer_10ms_Flag = 0;
             sensor_data_t raw_data = App_Sensor_Read(&Sensor_1);
-            float pid_out = Alg_PID_Compute(&g_pid, raw_data);
+            float pid_out = Alg_Pid_Compute(&g_pid, raw_data);
             App_Motor_SetSpeed(&Motor_Left, (uint32_t)pid_out);
         }
 
@@ -261,7 +261,7 @@ static const uint16_t g_light_pwm_map[2] = {
 ## 编码规范
 
 1. **文件命名**: `bsp_xxx.c`（BSP层）、`app_xxx.c`（APP层）、`alg_xxx.c`（ALG层）
-2. **函数命名**: 前缀 + 大驼峰，如`App_Motor_Init()`、`Alg_PID_Compute()`
+2. **函数命名**: 大驼峰 + 下划线，如`App_Motor_Init()`、`Alg_Pid_Compute()`
 3. **变量命名**: 全小写 + 下划线，如`current_pwm`
 4. **底层接口函数**: APP层中直接操作寄存器的函数，**必须以`HW_`为前缀**
 5. **分层注释**: 必须使用块状注释隔离代码段：

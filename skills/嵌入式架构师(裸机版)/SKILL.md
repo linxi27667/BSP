@@ -215,7 +215,11 @@ void App_Motor_Stop(void);
 
 /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
 static void HW_Gpio_Config(void) {
-    /* GPIO 配置 - 具体实现依赖平台 HAL */
+    /* 情况1: 使用 SysConfig/CubeMX 等图形化工具时，GPIO 已自动生成，留空即可 */
+    /* 情况2: 无图形化工具时，手动配置方向引脚为输出模式，示例:
+    DL_GPIO_initDigitalOutput(MOTOR_LEFT_DIR1_PORT, MOTOR_LEFT_DIR1_PIN);
+    DL_GPIO_initDigitalOutput(MOTOR_LEFT_DIR2_PORT, MOTOR_LEFT_DIR2_PIN);
+    */
 }
 static void HW_Gpio_Write(void *port, uint16_t pin, uint8_t level) {
     HAL_GPIO_WritePin((GPIO_TypeDef *)port, pin, (GPIO_PinState)level);

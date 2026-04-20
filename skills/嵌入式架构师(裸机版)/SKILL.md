@@ -100,6 +100,7 @@ typedef struct motor_dev {
     motor_gpio_t dir_pin2;
     void     *pwm_timer;
     uint32_t  pwm_channel;
+    void     *enc_timer;
 
     /* --- 2. 运行状态 (Status) --- */
     int32_t current_pwm;
@@ -111,7 +112,7 @@ typedef struct motor_dev {
     void    (*Init)(void);
     void    (*Gpio_Write)(void *port, uint16_t pin, uint8_t level);
     void    (*Pwm_Write)(void *timer, uint32_t channel, uint32_t duty);
-    int32_t (*Enc_Read)(void);
+    int32_t (*Enc_Read)(void *enc_timer);
 } motor_t;
 
 /* --- 4. 对外核心API (跨平台通用) --- */
@@ -154,7 +155,7 @@ void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
 void Motor_Update_Status(motor_t *motor) {
     if (motor == NULL) return;
     if (motor->Enc_Read != NULL) {
-        motor->encoder_speed = motor->Enc_Read();
+        motor->encoder_speed = motor->Enc_Read(motor->enc_timer);
         motor->total_position += motor->encoder_speed;
     }
 }
@@ -166,6 +167,46 @@ void Motor_Update_Status(motor_t *motor) {
 
 **唯一可以包含硬件头文件的层**。使用 `App_` 前缀命名对外业务函数。
 
+### 硬件配置宏规范（在 app_xxx.h 中集中定义）
+
+所有硬件引脚、定时器、通道等配置**必须以宏形式定义在 app_xxx.h 中**，对象实例化时引用宏而非直接写死值。这样做的好处：
+- 硬件改动只需改头文件，不用翻 .c 文件
+- 宏名即文档，一目了然
+- 方便跨项目复制时统一替换
+
+```c
+/* app_motor.h - 硬件配置宏集中定义 */
+#ifndef APP_MOTOR_H
+#define APP_MOTOR_H
+
+/* ============ 左电机硬件配置 ============ */
+#define MOTOR_LEFT_PWM_TIMER        TIMER_G7
+#define MOTOR_LEFT_PWM_CHANNEL      0
+#define MOTOR_LEFT_ENC_TIMER        TIMER_G8
+#define MOTOR_LEFT_DIR1_PORT        GPIOB
+#define MOTOR_LEFT_DIR1_PIN         DL_GPIO_PIN_14
+#define MOTOR_LEFT_DIR2_PORT        GPIOB
+#define MOTOR_LEFT_DIR2_PIN         DL_GPIO_PIN_15
+
+/* ============ 右电机硬件配置 ============ */
+#define MOTOR_RIGHT_PWM_TIMER       TIMER_G5
+#define MOTOR_RIGHT_PWM_CHANNEL     0
+#define MOTOR_RIGHT_ENC_TIMER       TIMER_G6
+#define MOTOR_RIGHT_DIR1_PORT       GPIOB
+#define MOTOR_RIGHT_DIR1_PIN        DL_GPIO_PIN_12
+#define MOTOR_RIGHT_DIR2_PORT       GPIOB
+#define MOTOR_RIGHT_DIR2_PIN        DL_GPIO_PIN_13
+
+/* ============ 业务接口声明 ============ */
+void App_Motor_System_Init(void);
+void App_Motor_Set_Speed(int32_t speed);
+void App_Motor_Forward(int32_t speed);
+void App_Motor_Backward(int32_t speed);
+void App_Motor_Stop(void);
+
+#endif
+```
+
 ```c
 /* app_motor.c - 【唯一硬件解禁区】 */
 #include "main.h"
@@ -173,31 +214,49 @@ void Motor_Update_Status(motor_t *motor) {
 #include "app_motor.h"
 
 /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
+static void HW_Gpio_Config(void) {
+    /* GPIO 配置 - 具体实现依赖平台 HAL */
+}
 static void HW_Gpio_Write(void *port, uint16_t pin, uint8_t level) {
     HAL_GPIO_WritePin((GPIO_TypeDef *)port, pin, (GPIO_PinState)level);
 }
 static void HW_Pwm_Write(void *timer, uint32_t channel, uint32_t duty) {
     __HAL_TIM_SET_COMPARE((TIM_HandleTypeDef *)timer, channel, duty);
 }
-static int32_t HW_Enc_Read(void) {
-    int32_t count = (short)__HAL_TIM_GET_COUNTER(&htim2);
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
+static int32_t HW_Enc_Read(void *enc_timer) {
+    /* 通过参数传入编码器定时器，禁止硬编码 &htim2 */
+    int32_t count = (short)__HAL_TIM_GET_COUNTER((TIM_HandleTypeDef *)enc_timer);
+    __HAL_TIM_SET_COUNTER((TIM_HandleTypeDef *)enc_timer, 0);
     return count;
 }
 
 /* ================= 2. 对象实例化与引脚拼装 ================= */
+/* 使用 app_motor.h 中定义的宏进行绑定，禁止直接写死硬件值 */
 motor_t Motor_Left = {
-    .dir_pin1 = {GPIOB, GPIO_PIN_12},
-    .dir_pin2 = {GPIOB, GPIO_PIN_13},
-    .pwm_timer = &htim1,
-    .pwm_channel = TIM_CHANNEL_1,
-    .Gpio_Write = HW_Gpio_Write,
-    .Pwm_Write  = HW_Pwm_Write,
-    .Enc_Read   = HW_Enc_Read
+    .dir_pin1 = {MOTOR_LEFT_DIR1_PORT, MOTOR_LEFT_DIR1_PIN},
+    .dir_pin2 = {MOTOR_LEFT_DIR2_PORT, MOTOR_LEFT_DIR2_PIN},
+    .pwm_timer = MOTOR_LEFT_PWM_TIMER,
+    .pwm_channel = MOTOR_LEFT_PWM_CHANNEL,
+    .enc_timer = MOTOR_LEFT_ENC_TIMER,
+    .Gpio_Config = HW_Gpio_Config,
+    .Gpio_Write  = HW_Gpio_Write,
+    .Pwm_Write   = HW_Pwm_Write,
+    .Enc_Read    = HW_Enc_Read
 };
 
-/* ================= 3. 业务逻辑入口 (App_ 前缀) ================= */
+/* ================= 3. 硬件初始化 (通过结构体字段访问，禁止硬编码) ================= */
+static void HW_Motor_Init(motor_t *motor) {
+    if (motor == NULL) return;
+    /* 通过结构体字段访问硬件资源，禁止写死 TIMER_G7 等 */
+    DL_TimerG_enableClock(motor->pwm_timer);
+    DL_TimerG_enableClock(motor->enc_timer);
+    /* PWM / 编码器定时器具体初始化... */
+    motor->Gpio_Config();
+}
+
+/* ================= 4. 业务逻辑入口 (App_ 前缀) ================= */
 void App_Motor_System_Init(void) {
+    HW_Motor_Init(&Motor_Left);
     Motor_Init_Device(&Motor_Left);
 }
 
@@ -218,7 +277,12 @@ void App_Motor_Stop(void) {
 }
 ```
 
-**关键规范**：上层（main.c / task_xxx）只允许调用 `App_xxx`，不直接调用 `Motor_xxx`。测试时可临时调用 BSP 层的 `Motor_xxx`。
+**关键规范**：
+- 硬件配置宏统一放在 `app_xxx.h` 中，按 `MOTOR_LEFT_xxx` / `MOTOR_RIGHT_xxx` 分组
+- 对象实例化引用宏，禁止直接写 `TIMER_G7`、`GPIO_PIN_14` 等裸值
+- `HW_xxx` 初始化函数通过结构体字段访问（如 `motor->pwm_timer`），禁止硬编码
+- 函数指针必须通过参数传递（如 `HW_Enc_Read(void *enc_timer)`），保证多对象通用性
+- 上层（main.c / task_xxx）只允许调用 `App_xxx`，不直接调用 `Motor_xxx`。测试时可临时调用 BSP 层的 `Motor_xxx`
 
 ---
 

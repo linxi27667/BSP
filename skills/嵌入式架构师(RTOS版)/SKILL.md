@@ -163,7 +163,7 @@ float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
 #define TASK_CONTROL_PRIORITY    (configMAX_PRIORITIES - 2)
 #define TASK_CONTROL_STACK_SIZE  1024
 
-void Task_MotorControl(void *pvParameters) {
+void Task_Motor_Control(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     sensor_data_t raw_data;
 
@@ -187,8 +187,8 @@ void Task_MotorControl(void *pvParameters) {
 }
 
 /* ================= 任务创建函数 ================= */
-void TaskControl_Create(void) {
-    xTaskCreate(Task_MotorControl,
+void Task_Control_Create(void) {
+    xTaskCreate(Task_Motor_Control,
                 "MotorCtrl",
                 TASK_CONTROL_STACK_SIZE,
                 NULL,
@@ -226,7 +226,7 @@ void Task_Comm(void *pvParameters) {
     }
 }
 
-void TaskComm_Create(void) {
+void Task_Comm_Create(void) {
     xTaskCreate(Task_Comm,
                 "Comm",
                 TASK_COMM_STACK_SIZE,
@@ -236,7 +236,7 @@ void TaskComm_Create(void) {
 }
 
 /* 其他任务通过此函数发送消息 */
-BaseType_t TaskComm_SendMsg(const comm_msg_t *msg) {
+BaseType_t Task_Comm_SendMsg(const comm_msg_t *msg) {
     return xQueueSend(xCommQueue, msg, pdMS_TO_TICKS(10));
 }
 ```
@@ -250,9 +250,9 @@ int main(void) {
     SystemClock_Config();
 
     /* 创建任务外壳 */
-    TaskControl_Create();
-    TaskComm_Create();
-    TaskDisplay_Create();
+    Task_Control_Create();
+    Task_Comm_Create();
+    Task_Display_Create();
 
     /* 启动调度器 - 从此交出控制权 */
     vTaskStartScheduler();
@@ -334,8 +334,8 @@ static const uint16_t g_light_pwm_map[2] = {
 
 ## 编码规范
 
-1. **文件命名**: `bsp_xxx.c`（BSP层）、`app_xxx.c`（APP层）、`alg_xxx.c`（ALG层）、`task_xxx.c`（TASK层）
-2. **函数命名**: 大驼峰 + 下划线，如`App_Motor_Init()`、`Alg_Pid_Compute()`、`TaskControl_Create()`
+1. **文件命名**: `bsp_xxx.h/.c`（BSP层）、`app_xxx.h/.c`（APP层）、`alg_xxx.h/.c`（ALG层）、`task_xxx.h/.c`（TASK层）
+2. **函数命名**: 大驼峰 + 下划线，如`App_Motor_Init()`、`Alg_Pid_Compute()`、`Task_Motor_Control()`、`Task_Control_Create()`
 3. **变量命名**: 全小写 + 下划线，如`current_pwm`
 4. **底层接口函数**: APP层中直接操作寄存器的函数，**必须以`HW_`为前缀**
 5. **分层注释**: 必须使用块状注释隔离代码段：

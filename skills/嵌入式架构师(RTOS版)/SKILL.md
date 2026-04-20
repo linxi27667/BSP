@@ -178,12 +178,17 @@ motor_t Motor_Left = {
 };
 
 /* ================= 3. 硬件初始化 (通过结构体字段访问，禁止硬编码) ================= */
+/* HW_Motor_Init 是外设初始化的集中入口，所有定时器/时钟/PWM 配置都写在这里
+ * 通过 motor->pwm_timer、motor->enc_timer 等字段访问，禁止直接写 TIMER_G7
+ */
 static void HW_Motor_Init(motor_t *motor) {
     if (motor == NULL) return;
-    /* 通过结构体字段访问硬件资源，禁止写死 TIMER_G7 等 */
+    /* 使能时钟 - 通过结构体字段，换对象自动切换 */
     DL_TimerG_enableClock(motor->pwm_timer);
     DL_TimerG_enableClock(motor->enc_timer);
-    /* PWM / 编码器定时器具体初始化... */
+    /* PWM 定时器初始化 - 配置周期、预分频、通道 */
+    /* 编码器定时器初始化 - 配置编码器模式 */
+    /* 调用 GPIO 配置 - 已在 HW_Gpio_Config 中实现 */
     motor->Gpio_Config();
 }
 

@@ -5,7 +5,7 @@ void Motor_Init_Device(motor_t *motor) {
     motor->current_pwm = 0;
     motor->encoder_speed = 0;
     motor->total_position = 0;
-    if (motor->Init != NULL) motor->Init();
+    if (motor->Init != NULL) motor->Init(motor);
 }
 
 void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
@@ -35,7 +35,7 @@ void Motor_Set_Speed(motor_t *motor, int32_t speed_val) {
 void Motor_Update_Status(motor_t *motor) {
     if (motor == NULL) return;
     if (motor->Enc_Read) {
-        motor->encoder_speed = motor->Enc_Read();
+        motor->encoder_speed = motor->Enc_Read(motor->enc_timer);
         motor->total_position += motor->encoder_speed;
     }
 }

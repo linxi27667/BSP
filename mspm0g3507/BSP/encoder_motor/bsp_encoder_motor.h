@@ -20,14 +20,15 @@ typedef struct motor_dev {
     motor_gpio_t dir_pin2;
     void     *pwm_timer;
     uint32_t  pwm_channel;
+    void     *enc_timer;
     int32_t current_pwm;
     int32_t encoder_speed;
     int32_t total_position;
     void    (*Gpio_Config)(void);
-    void    (*Init)(void);
+    void    (*Init)(struct motor_dev *motor);
     void    (*Gpio_Write)(void *port, uint16_t pin, uint8_t level);
     void    (*Pwm_Write)(void *timer, uint32_t channel, uint32_t duty);
-    int32_t (*Enc_Read)(void);
+    int32_t (*Enc_Read)(void *enc_timer);
 } motor_t;
 
 void Motor_Init_Device(motor_t *motor);

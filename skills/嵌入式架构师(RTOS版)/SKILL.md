@@ -143,20 +143,27 @@ void App_Motor_Stop(void);
 #include "app_motor.h"
 
 /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
-static void HW_Gpio_Config(void) {
+static void HW_Gpio_Config(void)
+{
     /* 情况1: 使用 SysConfig/CubeMX 等图形化工具时，GPIO 已自动生成，留空即可 */
     /* 情况2: 无图形化工具时，手动配置方向引脚为输出模式，示例:
     DL_GPIO_initDigitalOutput(MOTOR_LEFT_DIR1_PORT, MOTOR_LEFT_DIR1_PIN);
     DL_GPIO_initDigitalOutput(MOTOR_LEFT_DIR2_PORT, MOTOR_LEFT_DIR2_PIN);
     */
 }
-static void HW_Gpio_Write(void *port, uint16_t pin, uint8_t level) {
+
+static void HW_Gpio_Write(void *port, uint16_t pin, uint8_t level)
+{
     HAL_GPIO_WritePin((GPIO_TypeDef *)port, pin, (GPIO_PinState)level);
 }
-static void HW_Pwm_Write(void *timer, uint32_t channel, uint32_t duty) {
+
+static void HW_Pwm_Write(void *timer, uint32_t channel, uint32_t duty)
+{
     __HAL_TIM_SET_COMPARE((TIM_HandleTypeDef *)timer, channel, duty);
 }
-static int32_t HW_Enc_Read(void *enc_timer) {
+
+static int32_t HW_Enc_Read(void *enc_timer)
+{
     /* 通过参数传入编码器定时器，禁止硬编码 &htim2 */
     int32_t count = (short)__HAL_TIM_GET_COUNTER((TIM_HandleTypeDef *)enc_timer);
     __HAL_TIM_SET_COUNTER((TIM_HandleTypeDef *)enc_timer, 0);
@@ -181,7 +188,8 @@ motor_t Motor_Left = {
 /* HW_Motor_Init 是外设初始化的集中入口，所有定时器/时钟/PWM 配置都写在这里
  * 通过 motor->pwm_timer、motor->enc_timer 等字段访问，禁止直接写 TIMER_G7
  */
-static void HW_Motor_Init(motor_t *motor) {
+static void HW_Motor_Init(motor_t *motor)
+{
     if (motor == NULL) return;
     /* 使能时钟 - 通过结构体字段，换对象自动切换 */
     DL_TimerG_enableClock(motor->pwm_timer);
@@ -193,24 +201,29 @@ static void HW_Motor_Init(motor_t *motor) {
 }
 
 /* ================= 4. 业务逻辑入口 (App_ 前缀) ================= */
-void App_Motor_System_Init(void) {
+void App_Motor_System_Init(void)
+{
     HW_Motor_Init(&Motor_Left);
     Motor_Init_Device(&Motor_Left);
 }
 
-void App_Motor_Set_Speed(int32_t speed) {
+void App_Motor_Set_Speed(int32_t speed)
+{
     Motor_Set_Speed(&Motor_Left, speed);
 }
 
-void App_Motor_Forward(int32_t speed) {
+void App_Motor_Forward(int32_t speed)
+{
     Motor_Set_Speed(&Motor_Left, speed);
 }
 
-void App_Motor_Backward(int32_t speed) {
+void App_Motor_Backward(int32_t speed)
+{
     Motor_Set_Speed(&Motor_Left, -speed);
 }
 
-void App_Motor_Stop(void) {
+void App_Motor_Stop(void)
+{
     Motor_Set_Speed(&Motor_Left, 0);
 }
 ```
@@ -232,7 +245,8 @@ void App_Motor_Stop(void) {
 /* alg_pid.c - 与裸机版完全相同 */
 #include "alg_pid.h"
 
-float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
+float Alg_Pid_Compute(pid_ctx_t *ctx, float current)
+{
     float error = ctx->target - current;
     ctx->error_sum += error;
     float p = ctx->kp * error;
@@ -273,11 +287,13 @@ float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
 #define TASK_CONTROL_PRIORITY    (configMAX_PRIORITIES - 2)
 #define TASK_CONTROL_STACK_SIZE  1024
 
-void Motor_Control_Task(void *pvParameters) {
+void Motor_Control_Task(void *pvParameters)
+{
     TickType_t xLastWakeTime = xTaskGetTickCount();
     sensor_data_t raw_data;
 
-    while (1) {
+    while (1)
+    {
         /* 1. 阻塞等待精确周期 */
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
 
@@ -293,7 +309,8 @@ void Motor_Control_Task(void *pvParameters) {
 }
 
 /* ================= 任务创建函数 ================= */
-void Motor_Control_Task_Create(void) {
+void Motor_Control_Task_Create(void)
+{
     xTaskCreate(Motor_Control_Task,
                 "MotorCtrl",
                 TASK_CONTROL_STACK_SIZE,
@@ -315,24 +332,30 @@ void Motor_Control_Task_Create(void) {
 
 QueueHandle_t xCommQueue;
 
-void Comm_Task(void *pvParameters) {
+void Comm_Task(void *pvParameters)
+{
     comm_msg_t msg;
 
     xCommQueue = xQueueCreate(10, sizeof(comm_msg_t));
 
-    while (1) {
+    while (1)
+    {
         /* 阻塞等待消息，超时100ms */
-        if (xQueueReceive(xCommQueue, &msg, pdMS_TO_TICKS(100)) == pdPASS) {
+        if (xQueueReceive(xCommQueue, &msg, pdMS_TO_TICKS(100)) == pdPASS)
+        {
             /* 收到消息后调用ALG层处理 */
             Alg_Protocol_Parse(&msg);
-        } else {
+        }
+        else
+        {
             /* 超时：执行心跳等周期性操作 */
             Alg_Protocol_Send_Heartbeat();
         }
     }
 }
 
-void Comm_Task_Create(void) {
+void Comm_Task_Create(void)
+{
     xTaskCreate(Comm_Task,
                 "Comm",
                 TASK_COMM_STACK_SIZE,
@@ -342,7 +365,8 @@ void Comm_Task_Create(void) {
 }
 
 /* 其他任务通过此函数发送消息 */
-BaseType_t Comm_Task_SendMsg(const comm_msg_t *msg) {
+BaseType_t Comm_Task_SendMsg(const comm_msg_t *msg)
+{
     return xQueueSend(xCommQueue, msg, pdMS_TO_TICKS(10));
 }
 ```
@@ -351,7 +375,8 @@ BaseType_t Comm_Task_SendMsg(const comm_msg_t *msg) {
 
 ```c
 /* main.c - FreeRTOS入口，只负责创建任务 */
-int main(void) {
+int main(void)
+{
     HAL_Init();
     SystemClock_Config();
 
@@ -367,7 +392,8 @@ int main(void) {
     vTaskStartScheduler();
 
     /* 如果运行到这里，说明内存不足 */
-    while (1);
+    while (1)
+        ;
 }
 ```
 
@@ -386,10 +412,13 @@ int main(void) {
 
 static uint32_t g_counter = 0;
 
-void Debug_Task(void *pv) {
-    while (1) {
+void Debug_Task(void *pv)
+{
+    while (1)
+    {
         HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
-        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_2) == GPIO_PIN_SET) {
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_2) == GPIO_PIN_SET)
+        {
             g_counter++;
             Counter_Save();  /* 内部调用 W25Q BSP 库 */
         }
@@ -397,7 +426,8 @@ void Debug_Task(void *pv) {
     }
 }
 
-void Debug_Task_Create(void) {
+void Debug_Task_Create(void)
+{
     xTaskCreate(Debug_Task, "debug", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
 }
 ```
@@ -411,16 +441,19 @@ void Debug_Task_Create(void) {
 static void motor_gpio_config(void);
 static void motor_pwm_set(uint32_t duty);
 
-void Motor_Task(void *pv) {
+void Motor_Task(void *pv)
+{
     motor_gpio_config();    /* dri 层自己封装驱动 */
     motor_pwm_set(0);
-    while (1) {
+    while (1)
+    {
         motor_pwm_set(500);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-void Motor_Task_Create(void) {
+void Motor_Task_Create(void)
+{
     xTaskCreate(Motor_Task, "motor", 512, NULL, tskIDLE_PRIORITY + 2, NULL);
 }
 ```
@@ -524,12 +557,14 @@ static const uint16_t g_light_pwm_map[2] = {
      static uint32_t g_led_blink_counter = 0;
 
      // LED 闪烁任务入口
-     void Debug_Task(void *pvParameters) {
+     void Debug_Task(void *pvParameters)
+     {
      ```
    - **禁止行尾注释**: 注释必须写在变量/语句上方，不要跟在行尾
 7. **预处理指令缩进**: `#if`/`#ifdef`/`#endif` 等预处理指令必须跟随所在控制流的缩进层级，不能顶格写。包含关系必须体现缩进：
    ```c
-   if (condition) {
+   if (condition)
+   {
        do_something();
        #if DEBUG_MODE == 1
        log_info("debug message");

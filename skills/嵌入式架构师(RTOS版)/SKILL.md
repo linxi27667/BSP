@@ -60,7 +60,7 @@ Project/
 
 BSP、APP、ALG 三层**100%复用裸机代码**，唯一区别是调度方式：
 - 裸机的外壳是 `main.c` 中的 `while(1)` 时标轮询 + 组合逻辑函数
-- RTOS的外壳是 `task_xxx.c` 中的 `Task_Entry` 函数入口
+- RTOS的外壳是 `task_xxx.c` 中的任务入口函数
 
 ---
 
@@ -257,7 +257,7 @@ float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
 |------|------|
 | 外壳模式 | 任务只负责调度：等待→调APP→调ALG→输出 |
 | 优先级分配 | 控制任务 > 通信任务 > 显示任务 > 空闲任务 |
-| 周期精确 | 使用`vTaskDelayUntil`而非`vTaskDelay`保证精确周期 |
+| 周期精确 | 使用 `vTaskDelayUntil` 而非 `vTaskDelay` 保证精确周期 |
 | 消息驱动 | 任务间通信通过Queue/EventGroup，禁止共享全局变量 |
 
 ### 控制任务模板
@@ -273,11 +273,11 @@ float Alg_Pid_Compute(pid_ctx_t *ctx, float current) {
 #define TASK_CONTROL_PRIORITY    (configMAX_PRIORITIES - 2)
 #define TASK_CONTROL_STACK_SIZE  1024
 
-void Task_Motor_Control(void *pvParameters) {
+void Motor_Control_Task(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     sensor_data_t raw_data;
 
-    for(;;) {
+    while (1) {
         /* 1. 阻塞等待精确周期 */
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
 
@@ -293,8 +293,8 @@ void Task_Motor_Control(void *pvParameters) {
 }
 
 /* ================= 任务创建函数 ================= */
-void Task_Control_Create(void) {
-    xTaskCreate(Task_Motor_Control,
+void Motor_Control_Task_Create(void) {
+    xTaskCreate(Motor_Control_Task,
                 "MotorCtrl",
                 TASK_CONTROL_STACK_SIZE,
                 NULL,
@@ -315,12 +315,12 @@ void Task_Control_Create(void) {
 
 QueueHandle_t xCommQueue;
 
-void Task_Comm(void *pvParameters) {
+void Comm_Task(void *pvParameters) {
     comm_msg_t msg;
 
     xCommQueue = xQueueCreate(10, sizeof(comm_msg_t));
 
-    for(;;) {
+    while (1) {
         /* 阻塞等待消息，超时100ms */
         if (xQueueReceive(xCommQueue, &msg, pdMS_TO_TICKS(100)) == pdPASS) {
             /* 收到消息后调用ALG层处理 */
@@ -332,8 +332,8 @@ void Task_Comm(void *pvParameters) {
     }
 }
 
-void Task_Comm_Create(void) {
-    xTaskCreate(Task_Comm,
+void Comm_Task_Create(void) {
+    xTaskCreate(Comm_Task,
                 "Comm",
                 TASK_COMM_STACK_SIZE,
                 NULL,
@@ -342,7 +342,7 @@ void Task_Comm_Create(void) {
 }
 
 /* 其他任务通过此函数发送消息 */
-BaseType_t Task_Comm_SendMsg(const comm_msg_t *msg) {
+BaseType_t Comm_Task_SendMsg(const comm_msg_t *msg) {
     return xQueueSend(xCommQueue, msg, pdMS_TO_TICKS(10));
 }
 ```
@@ -355,18 +355,82 @@ int main(void) {
     HAL_Init();
     SystemClock_Config();
 
+    /* 用户业务初始化 */
+    App_W25Qxx_System_Init();
+
     /* 创建任务外壳 */
-    Task_Control_Create();
-    Task_Comm_Create();
-    Task_Display_Create();
+    Motor_Control_Task_Create();
+    Comm_Task_Create();
+    Display_Task_Create();
 
     /* 启动调度器 - 从此交出控制权 */
     vTaskStartScheduler();
 
     /* 如果运行到这里，说明内存不足 */
-    for(;;);
+    while (1);
 }
 ```
+
+---
+
+## 混合架构模式：`dri_xxx.c` 弹性层
+
+项目可以混合使用完整版架构和轻量版架构。`dri_xxx.c` 文件在 `Driver/` 目录下，扮演弹性角色：
+
+### 场景A：有 BSP/APP 库 → dri 充当任务层
+
+```c
+/* dri_debug.c - 已有 App_W25Qxx 库，dri 只是任务壳 */
+#include "dri_debug.h"
+#include "app_w25qxx.h"   /* 调用已有的 BSP/APP 库 */
+
+static uint32_t g_counter = 0;
+
+void Debug_Task(void *pv) {
+    while (1) {
+        HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_2) == GPIO_PIN_SET) {
+            g_counter++;
+            Counter_Save();  /* 内部调用 W25Q BSP 库 */
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void Debug_Task_Create(void) {
+    xTaskCreate(Debug_Task, "debug", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
+}
+```
+
+### 场景B：无 BSP/APP 库 → dri 自己封装一切
+
+```c
+/* dri_motor.c - 没有 BSP/APP 库，dri 自己封装 */
+#include "dri_motor.h"
+
+static void motor_gpio_config(void);
+static void motor_pwm_set(uint32_t duty);
+
+void Motor_Task(void *pv) {
+    motor_gpio_config();    /* dri 层自己封装驱动 */
+    motor_pwm_set(0);
+    while (1) {
+        motor_pwm_set(500);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+void Motor_Task_Create(void) {
+    xTaskCreate(Motor_Task, "motor", 512, NULL, tskIDLE_PRIORITY + 2, NULL);
+}
+```
+
+### 混合模式规范
+
+| 场景 | dri_xxx.c 角色 | 命名风格 |
+|------|---------------|---------|
+| 有 BSP/APP 库 | 任务壳，调用 `App_xxx()` | 简洁函数名，如 `Counter_Save()` |
+| 无 BSP/APP 库 | 完整封装（驱动+业务+任务） | 内部函数 `static`，对外 `Xxx_Task_Create()` |
 
 ---
 
@@ -440,16 +504,65 @@ static const uint16_t g_light_pwm_map[2] = {
 
 ## 编码规范
 
-1. **文件命名**: `bsp_xxx.h/.c`（BSP层）、`app_xxx.h/.c`（APP层）、`alg_xxx.h/.c`（ALG层）、`task_xxx.h/.c`（TASK层）
-2. **函数命名**: 大驼峰 + 下划线，如`App_Motor_Init()`、`Alg_Pid_Compute()`、`Task_Motor_Control()`、`Task_Control_Create()`
-3. **变量命名**: 全小写 + 下划线，如`current_pwm`
-4. **底层接口函数**: APP层中直接操作寄存器的函数，**必须以`HW_`为前缀**
-5. **分层注释**: 必须使用块状注释隔离代码段：
+1. **文件命名**: `bsp_xxx.h/.c`（BSP层）、`app_xxx.h/.c`（APP层）、`alg_xxx.h/.c`（ALG层）、`task_xxx.h/.c`（TASK层）、`dri_xxx.h/.c`（弹性驱动层）
+2. **头文件集中**: **所有宏定义、结构体、`#include`、`extern` 声明必须放在 `.h` 头文件中**，`.c` 文件只包含 `#include "xxx.h"` + 函数实现。禁止在 `.c` 中定义任何宏、结构体、extern 声明
+3. **函数命名**: 大驼峰 + 下划线风格
+   - BSP 层：`Motor_Init_Device()`, `Motor_Set_Speed()`
+   - APP 层：`App_Motor_Init()`, `App_Motor_Set_Speed()`
+   - ALG 层：`Alg_Pid_Compute()`, `Alg_Filter_Moving()`
+   - TASK 层：**`Xxx_Task()` 入口 + `Xxx_Task_Create()` 创建**，如 `Motor_Control_Task()`, `Comm_Task()`, `W25qxx_Task()`
+   - DRI 层：**简洁函数名，去前缀**，如 `Counter_Save()`, `Counter_Load()`, `Debug_Task()`, `Debug_Task_Create()`
+   - APP 硬件底层：`HW_Gpio_Write()`, `HW_Pwm_Init()`
+4. **变量命名**: 全小写 + 下划线，如 `current_pwm`
+5. **任务循环**: 必须使用 `while(1)` 风格，符合原生 RTOS 标准
+6. **注释风格**:
+   - **分层注释**: 仅代码段分隔使用 `/* ================= 分层名称 ================= */`
+   - **变量/函数注释**: 单个变量或函数使用 `// ` 行注释放在上方，禁止用 `/* */` 注释单个变量：
+     ```c
+     /* ================= Debug Task ================= */
+     // 全局 LED 闪烁计数器
+     static uint32_t g_led_blink_counter = 0;
+
+     // LED 闪烁任务入口
+     void Debug_Task(void *pvParameters) {
+     ```
+   - **禁止行尾注释**: 注释必须写在变量/语句上方，不要跟在行尾
+7. **预处理指令缩进**: `#if`/`#ifdef`/`#endif` 等预处理指令必须跟随所在控制流的缩进层级，不能顶格写。包含关系必须体现缩进：
    ```c
-   /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
-   /* ================= 2. 对象实例化与引脚拼装 ================= */
-   /* ================= 3. 对外业务/功能切入点 ================= */
+   if (condition) {
+       do_something();
+       #if DEBUG_MODE == 1
+       log_info("debug message");
+       #endif
+   }
    ```
+
+---
+
+## FreeRTOS 原生 API 强制规范（铁律）
+
+**禁止使用 CMSIS-RTOS2 包装层（`cmsis_os.h` / `cmsis_os2.h`）。** 所有 FreeRTOS 调用必须使用原生 API。
+
+### 禁止的 CMSIS-RTOS2 API vs 替代原生 API
+
+| 禁止（CMSIS-RTOS2） | 必须使用（原生 FreeRTOS） |
+|---------------------|--------------------------|
+| `#include "cmsis_os.h"` | `#include "FreeRTOS.h"` + `#include "task.h"` / `queue.h` / `semphr.h` / `event_groups.h` / `timers.h` |
+| `osThreadNew(fn, arg, &attr)` | `xTaskCreate(fn, "name", stack_words, arg, priority, &handle)` |
+| `osThreadAttr_t` | 不需要，参数直接传给 `xTaskCreate` |
+| `osThreadId_t` | `TaskHandle_t` |
+| `osPriorityNormal` | `tskIDLE_PRIORITY + N`（N=1,2,3...） |
+| `osDelay(ticks)` | `vTaskDelay(ticks)` |
+| `osDelayUntil(ticks)` | `vTaskDelayUntil(&last_wake, ticks)` |
+| `osKernelInitialize()` | 不需要，直接调 `vTaskStartScheduler()` |
+| `osKernelStart()` | `vTaskStartScheduler()` |
+| `osMessageQueueNew()` / `osMessageQueuePut()` / `osMessageQueueGet()` | `xQueueCreate()` / `xQueueSend()` / `xQueueReceive()` |
+| `osSemaphoreNew()` / `osSemaphoreAcquire()` / `osSemaphoreRelease()` | `xSemaphoreCreateXxx()` / `xSemaphoreTake()` / `xSemaphoreGive()` |
+| `osMutexNew()` / `osMutexAcquire()` / `osMutexRelease()` | `xSemaphoreCreateMutex()` / `xSemaphoreTake()` / `xSemaphoreGive()` |
+| `osEventFlagsNew()` / `osEventFlagsSet()` / `osEventFlagsWait()` | `xEventGroupCreate()` / `xEventGroupSetBits()` / `xEventGroupWaitBits()` |
+| `osThreadFlagsSet()` / `osThreadFlagsWait()` | `xTaskNotify()` / `ulTaskNotifyTake()` |
+| `osTimerNew()` / `osTimerStart()` | `xTimerCreate()` / `xTimerStart()` |
+| `pdMS_TO_TICKS()` | 保留，这是 FreeRTOS 原生宏 |
 
 ---
 

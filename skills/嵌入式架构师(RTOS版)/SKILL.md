@@ -536,6 +536,20 @@ static const uint16_t g_light_pwm_map[2] = {
        #endif
    }
    ```
+8. **大括号风格**: 条件语句和循环语句的左大括号必须换行并缩进，禁止紧跟在语句同行：
+   ```c
+   if (HAL_GPIO_ReadPin(LED_DEBUG_PORT, LED_DEBUG_PIN) == GPIO_PIN_SET)
+   {
+       g_led_blink_counter++;
+       Counter_Save();
+   }
+
+   while (1)
+   {
+       HAL_GPIO_TogglePin(LED_DEBUG_PORT, LED_DEBUG_PIN);
+       vTaskDelay(pdMS_TO_TICKICS(100));
+   }
+   ```
 
 ---
 

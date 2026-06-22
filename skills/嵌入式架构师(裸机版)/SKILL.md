@@ -428,6 +428,81 @@ static const uint16_t g_light_pwm_map[2] = {
 
 ---
 
+## 日志规范 (IWAE + 模块标签二级分类)
+
+### 日志等级
+
+使用 IWAE 四级分类，首字母作为等级前缀：
+
+| 等级 | 前缀 | 用途 | 颜色 |
+|------|------|------|------|
+| INFO | `I/` | 正常运行信息：初始化完成、状态切换、周期上报 | 青色 |
+| WARN | `W/` | 异常但可恢复：超时重试、数据校验失败、限幅触发 | 黄色 |
+| ASSERT | `A/` | 关键断言：连接建立、协议握手、资源分配成功 | 品红 |
+| ERROR | `E/` | 严重错误：硬件故障、通信中断、安全保护触发 | 红色 |
+
+### 二级模块标签（方括号分类）
+
+在日志消息开头用方括号标注模块类别，提供二级分类。TAG 参数与方括号标签保持一致。
+
+**层级标签（按架构层级）**：
+
+| 标签 | 含义 | 典型场景 |
+|------|------|----------|
+| `[BSP]` | 板级驱动层 | 外设初始化、寄存器配置、底层状态 |
+| `[APP]` | 应用业务层 | 业务逻辑流转、对象实例化、硬件绑定 |
+| `[ALG]` | 算法层 | PID 参数、滤波结果、协议解析 |
+
+**功能标签（按设备/模块）**：
+
+| 标签 | 含义 | 典型场景 |
+|------|------|----------|
+| `[SYS]` | 系统 | 时钟配置、看门狗、内存、主循环 |
+| `[MOTOR]` | 电机 | 启停、方向、PWM 占空比、过流 |
+| `[SENSOR]` | 传感器 | 采样值、校准、越限报警 |
+| `[CTRL]` | 控制逻辑 | PID 输出、状态机切换、目标值更新 |
+| `[KEY]` | 按键 | 按下、释放、长按、连击 |
+| `[SAFETY]` | 安全保护 | 急停、碰撞、过温、过流、限位 |
+| `[COMM]` | 通信 | UART/SPI/I2C 收发、协议帧 |
+| `[DTU]` | DTU/无线模块 | MQTT 连接、数据上报、指令下发 |
+| `[IOT]` | 物联网 | 云端指令、设备状态、OTA |
+| `[W25Q]` | Flash 存储 | 读写、擦除、参数持久化 |
+| `[DISPLAY]` | 显示 | OLED/LCD 刷新、UI 状态 |
+
+### 日志调用规范
+
+```c
+/* 格式：elog_x("TAG", "[TAG] 消息内容", 参数...); */
+elog_i("SYS",    "[SYS] System ready - waiting for keys");
+elog_w("SAFETY", "[SAFETY] Collision blocks %s: diff=%ld", side, diff);
+elog_e("MOTOR",  "[MOTOR] Overcurrent detected! duty=%lu", duty);
+elog_a("DTU",    "[DTU] MQTT connected to %s", broker_ip);
+
+/* 条件编译开关：高频调试日志用宏守护 */
+#if CTRL_DEBUG == 1
+elog_d("CTRL", "[CTRL] state=%s left=%ld right=%ld diff=%ld",
+       state_name, left, right, diff);
+#endif
+```
+
+### 输出格式示例
+
+```
+I/SYS     [12345] [SYS] System ready - waiting for keys
+W/SAFETY  [12400] [SAFETY] Collision blocks LEFT: diff=15mm
+E/MOTOR   [12500] [MOTOR] Overcurrent detected! duty=950
+A/DTU     [13000] [DTU] MQTT connected to 192.168.1.100
+```
+
+### 规范要点
+
+1. **TAG 与方括号必须一致**：`elog_x("MOTOR", "[MOTOR] ...")` ，禁止 TAG 用 `MOTOR` 但方括号写 `[MOT]`
+2. **高频日志必须条件编译**：10ms 级控制循环中的调试日志用 `#if XXX_DEBUG == 1` 守护，避免阻塞主循环
+3. **安全相关日志不可编译守护**：`[SAFETY]`、`[MOTOR]` 错误级日志必须始终输出
+4. **日志等级选择原则**：正常流程用 I，异常可恢复用 W，关键节点用 A，不可恢复错误用 E
+
+---
+
 ## 交互指南
 
 1. **授人以渔**：给出代码前，先解释"为什么要这么设计"

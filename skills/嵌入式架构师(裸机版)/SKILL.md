@@ -529,6 +529,131 @@ void Key_Process(uint8_t pin_level)
 
 ---
 
+## ISR 中断服务函数铁律
+
+### ISR 的物理位置
+
+| 方案 | 文件命名 | 适用场景 |
+|------|----------|----------|
+| 方案A（推荐） | `bsp_xxx.c` 底部 | 中断与驱动强绑定（如编码器溢出、DMA传输完成） |
+| 方案B | 独立 `xxx_isr.c/.h` | 中断数量多、需要集中管理（如多路UART接收中断） |
+
+**铁律**：无论哪种方案，ISR 函数**必须留在 BSP 层或独立的 ISR 文件中**，绝对禁止出现在 APP 层或 TASK 层。
+
+### ISR 调用铁律
+
+```c
+/* bsp_uart.c - ISR 写在 BSP 层底部 */
+void USART1_IRQHandler(void)
+{
+    // ✅ 允许：读取硬件寄存器、清除中断标志
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE) != RESET)
+    {
+        __HAL_UART_CLEAR_IDLEFLAG(&huart1);
+
+        // ✅ 允许：设置 volatile 全局标志位（裸机核心通信方式）
+        g_uart1_rx_flag = 1;
+
+        // ✅ 允许：将数据写入全局缓冲区
+        g_uart1_rx_len = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+    }
+
+    // ❌ 绝对禁止：直接调用一次业务函数
+    // Motor_Pitch_Forward(100);  // 灾难！ISR中不允许复杂操作
+
+    // ❌ 绝对禁止：调用 HAL_Delay 或任何阻塞函数
+    // HAL_Delay(1);  // 灾难！ISR中禁止阻塞
+
+    // ❌ 绝对禁止：调用 printf / elog_x
+    // printf("ISR triggered\n");  // 灾难！ISR中禁止IO操作
+}
+```
+
+### ISR 与主循环的通信方式（裸机）
+
+| 通信方式 | 声明 | ISR中操作 | main中检测 |
+|----------|------|-----------|-----------|
+| 标志位 | `volatile uint8_t g_xxx_flag;` | `g_xxx_flag = 1;` | `if (g_xxx_flag) { g_xxx_flag = 0; ... }` |
+| 计数器 | `volatile uint32_t g_xxx_count;` | `g_xxx_count++;` | 直接读取 |
+| 缓冲区+长度 | `volatile uint8_t g_buf[N]; volatile uint16_t g_len;` | 写入数据+更新长度 | `if (g_len > 0) { 处理; g_len = 0; }` |
+
+**铁律总结**：
+1. ISR 中**只做三件事**：读寄存器、清标志、设全局变量
+2. ISR 中**绝对禁止**：调用一次业务函数、调用阻塞函数、调用printf/日志
+3. ISR 相关的全局变量**必须加 `volatile`**，否则编译器优化可能导致主循环读不到更新
+4. 裸机中 ISR 设置标志位 → `main.c` 的 `while(1)` 检测标志位 → 调用一次业务函数处理
+
+---
+
+## 跨层头文件包含铁律
+
+明确每一层**可以 include 谁**，杜绝循环依赖和越级访问：
+
+| 层级 | 可以 include | 禁止 include |
+|------|-------------|-------------|
+| BSP层 | 本层头文件、标准库 | 任何硬件头文件、APP层头文件、TASK层头文件 |
+| APP层 | 本层头文件、BSP层头文件、硬件头文件（唯一特权） | TASK层头文件 |
+| TASK层 | 本层头文件、APP层头文件 | BSP层头文件（必须通过APP层间接访问） |
+
+**铁律**：TASK 层**绝对禁止**直接 `#include "bsp_xxx.h"` 或调用 `Bsp_xxx()` 函数。所有对底层驱动的访问必须通过 APP 层一次业务函数间接完成。
+
+---
+
+## APP层对象实例的暴露规范
+
+APP 层实例化的物理对象（如 `Motor_Left`）遵循以下暴露规则：
+
+| 场景 | 暴露方式 | 说明 |
+|------|----------|------|
+| 上层只需操作对象 | **不暴露**，通过一次业务函数封装 | `Motor_Pitch_Forward(speed)` 内部访问 `Motor_Left`，上层无需知道对象存在 |
+| 上层需要读取对象状态 | `app_xxx.h` 中 `extern` 声明 | `extern bsp_motor_t Motor_Left;` 允许上层读取 `Motor_Left.encoder_speed` |
+| 上层需要传递对象指针 | APP层提供 Getter 函数 | `bsp_motor_t *Motor_Get_Left(void);` 返回指针，不暴露全局变量 |
+
+**铁律**：优先使用一次业务函数封装访问，`extern` 暴露是只读场景的最后手段。**绝对禁止** TASK 层直接修改 APP 层对象的结构体字段。
+
+---
+
+## 初始化顺序铁律
+
+系统初始化必须严格按 **BSP → APP → TASK** 的顺序执行，禁止跨层乱序：
+
+```c
+/* main.c - 初始化顺序铁律 */
+int main(void)
+{
+    /* 1. HAL 底层初始化（芯片厂商库） */
+    HAL_Init();
+    SystemClock_Config();
+
+    /* 2. APP层系统初始化（内部按序完成 BSP + APP 初始化） */
+    App_System_Init();
+    /* App_System_Init 内部执行顺序：
+     *   HW_Motor_Init(&Motor_Left);       // APP层硬件初始化
+     *   Bsp_Motor_Init_Device(&Motor_Left); // BSP层逻辑初始化
+     */
+
+    /* 3. TASK层初始化（如需要） */
+    /* Track_Init(); */
+
+    /* 4. 进入主循环 */
+    uint32_t last_10ms = 0;
+    while (1)
+    {
+        uint32_t now = systick_ms;
+        /* ... 时标切片调度 ... */
+    }
+}
+```
+
+| 顺序 | 阶段 | 允许 | 禁止 |
+|------|------|------|------|
+| 1 | HAL初始化 | 时钟、GPIO基础配置 | 调用任何BSP/APP函数 |
+| 2 | APP初始化 | HW_xxx硬件配置 + Bsp_xxx逻辑初始化 | 在初始化前调用业务函数 |
+| 3 | TASK初始化 | 各业务模块的初始状态设置 | 在APP初始化前执行 |
+| 4 | 主循环 | 时标切片调度 | 阻塞延时 |
+
+---
+
 ## 设备状态枚举架构
 
 所有设备状态必须使用枚举类型，禁止使用裸`uint8_t`。
@@ -705,3 +830,11 @@ void elog_port_get_time(char *buf, size_t size)
 5. **一次业务函数中包含阻塞调用**
    - 症状: APP 层函数中出现 `HAL_Delay` 或长循环
    - 解决: 将阻塞调用移到 TASK 层的二次业务函数中，或改用状态机拆分，APP 层绝对禁止阻塞
+
+6. **ISR 中直接调用业务函数**
+   - 症状: `USART1_IRQHandler` 中出现 `Motor_Pitch_Forward()` 或 `HAL_Delay()`
+   - 解决: ISR 只做"读寄存器→清标志→设全局变量"，业务逻辑在 `main.c` 的 `while(1)` 中检测标志位后调用一次业务函数处理
+
+7. **TASK层直接include BSP头文件**
+   - 症状: `track.c` 中出现 `#include "bsp_motor.h"` 或直接调用 `Bsp_Motor_Set_Speed()`
+   - 解决: TASK 层只能 include APP 层头文件，通过一次业务函数间接访问 BSP 层

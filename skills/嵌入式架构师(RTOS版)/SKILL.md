@@ -612,6 +612,217 @@ ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
 ---
 
+## ISR 中断服务函数铁律
+
+### ISR 的物理位置
+
+| 方案 | 文件命名 | 适用场景 |
+|------|----------|----------|
+| 方案A（推荐） | `bsp_xxx.c` 底部 | 中断与驱动强绑定（如编码器溢出、DMA传输完成） |
+| 方案B | 独立 `xxx_isr.c/.h` | 中断数量多、需要集中管理（如多路UART接收中断） |
+
+**铁律**：无论哪种方案，ISR 函数**必须留在 BSP 层或独立的 ISR 文件中**，绝对禁止出现在 APP 层或 TASK 层。
+
+### ISR 调用铁律
+
+```c
+/* bsp_uart.c - ISR 写在 BSP 层底部 */
+void USART1_IRQHandler(void)
+{
+    // ✅ 允许：读取硬件寄存器、清除中断标志
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE) != RESET)
+    {
+        __HAL_UART_CLEAR_IDLEFLAG(&huart1);
+
+        // ✅ 允许：设置全局标志位（裸机风格）
+        g_uart1_rx_flag = 1;
+
+        // ✅ 允许：FromISR 通知（RTOS风格）
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xQueueSendFromISR(xUartRxQueue, &rx_data, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+
+    // ❌ 绝对禁止：直接调用一次业务函数
+    // Motor_Pitch_Forward(100);  // 灾难！ISR中不允许复杂操作
+
+    // ❌ 绝对禁止：调用带阻塞的API
+    // xQueueSend(xQueue, &data, pdMS_TO_TICKS(10));  // 灾难！ISR中禁止阻塞
+
+    // ❌ 绝对禁止：调用 printf / elog_x
+    // printf("ISR triggered\n");  // 灾难！ISR中禁止IO操作
+}
+```
+
+### ISR 与调度层的通信方式
+
+| 场景 | 裸机通信 | RTOS通信 |
+|------|----------|----------|
+| 通知"有数据到了" | `volatile` 全局标志位 | `xQueueSendFromISR` / `xTaskNotifyFromISR` |
+| 传递数据 | 全局缓冲区 + 标志位 | `xQueueSendFromISR` 传结构体 |
+| 紧急保护触发 | 全局标志位 + main轮询检测 | `xEventGroupSetBitsFromISR` |
+
+**铁律总结**：
+1. ISR 中**只做三件事**：读寄存器、清标志、抛事件
+2. ISR 中**绝对禁止**：调用一次业务函数、调用阻塞API、调用printf/日志
+3. ISR 中的全局变量/标志位**必须加 `volatile`**
+4. RTOS 中 ISR 必须使用 `FromISR` 后缀的 API
+
+---
+
+## APP层共享对象互斥锁保护（RTOS独有）
+
+当 APP 层的某个物理对象（如 `Motor_Pitch`）需要在多个 TASK 中被交叉调用时，APP 层的一次业务函数**内部必须封装互斥锁（Mutex）保护**，对上层 TASK 保持完全透明。
+
+### 问题场景
+
+```
+Vision_Track_Task (优先级高) ──┐
+                                ├──→ Motor_Pitch_Forward() ──→ 操作 Motor_Left 结构体
+Comm_Task (优先级低) ──────────┘
+```
+
+如果两个任务同时调用 `Motor_Pitch_Forward()`，可能出现：高优先级任务正在修改结构体字段时被低优先级任务打断，导致数据不一致。
+
+### 解决方案：APP层内部封装Mutex
+
+```c
+/* app_motor.c - APP层内部封装互斥锁，对上层透明 */
+#include "FreeRTOS.h"
+#include "semphr.h"
+
+// 互斥锁：APP层内部持有，不暴露给上层
+static SemaphoreHandle_t xMotorMutex = NULL;
+
+/* ================= 2. 对象实例化 ================= */
+bsp_motor_t Motor_Left = { /* ... */ };
+
+/* ================= 3. 硬件初始化 ================= */
+static void HW_Motor_Init(bsp_motor_t *motor) { /* ... */ }
+
+//=====系统初始化（保留 App_ 前缀）=====
+void App_System_Init(void)
+{
+    // 创建互斥锁（在调度器启动前调用）
+    xMotorMutex = xSemaphoreCreateMutex();
+
+    HW_Motor_Init(&Motor_Left);
+    Bsp_Motor_Init_Device(&Motor_Left);
+    HW_Motor_Init(&Motor_Right);
+    Bsp_Motor_Init_Device(&Motor_Right);
+}
+
+//=====电机一次业务函数（内部封装Mutex，上层无感）=====
+void Motor_Pitch_Forward(int32_t speed)
+{
+    if (xMotorMutex != NULL)
+    {
+        xSemaphoreTake(xMotorMutex, pdMS_TO_TICKS(5));
+    }
+    Bsp_Motor_Set_Speed(&Motor_Left, speed);
+    if (xMotorMutex != NULL)
+    {
+        xSemaphoreGive(xMotorMutex);
+    }
+}
+
+void Motor_Stop(void)
+{
+    if (xMotorMutex != NULL)
+    {
+        xSemaphoreTake(xMotorMutex, pdMS_TO_TICKS(5));
+    }
+    Bsp_Motor_Set_Speed(&Motor_Left, 0);
+    Bsp_Motor_Set_Speed(&Motor_Right, 0);
+    if (xMotorMutex != NULL)
+    {
+        xSemaphoreGive(xMotorMutex);
+    }
+}
+```
+
+### 互斥锁封装铁律
+
+| 规则 | 说明 |
+|------|------|
+| 透明性 | Mutex 是 APP 层的**内部实现细节**，`app_motor.h` 中**禁止暴露** Mutex 句柄 |
+| 创建时机 | 在 `App_System_Init()` 中创建，必须在 `vTaskStartScheduler()` 之前 |
+| 超时策略 | `xSemaphoreTake` 超时设为短超时（5ms），避免死锁；获取失败时跳过本次操作 |
+| 粒度控制 | 同一物理对象（如电机组）共享一把锁，不同物理对象各自独立 |
+| 单任务独占 | 如果某对象只被一个 Task 调用，**不需要加锁**，避免不必要的开销 |
+
+---
+
+## 跨层头文件包含铁律
+
+明确每一层**可以 include 谁**，杜绝循环依赖和越级访问：
+
+| 层级 | 可以 include | 禁止 include |
+|------|-------------|-------------|
+| BSP层 | 本层头文件、标准库 | 任何硬件头文件、APP层头文件、TASK层头文件、FreeRTOS |
+| APP层 | 本层头文件、BSP层头文件、硬件头文件（唯一特权）、FreeRTOS（仅Mutex） | TASK层头文件 |
+| TASK层 | 本层头文件、APP层头文件、FreeRTOS | BSP层头文件（必须通过APP层间接访问） |
+
+**铁律**：TASK 层**绝对禁止**直接 `#include "bsp_xxx.h"` 或调用 `Bsp_xxx()` 函数。所有对底层驱动的访问必须通过 APP 层一次业务函数间接完成。
+
+---
+
+## APP层对象实例的暴露规范
+
+APP 层实例化的物理对象（如 `Motor_Left`）遵循以下暴露规则：
+
+| 场景 | 暴露方式 | 说明 |
+|------|----------|------|
+| 上层只需操作对象 | **不暴露**，通过一次业务函数封装 | `Motor_Pitch_Forward(speed)` 内部访问 `Motor_Left`，上层无需知道对象存在 |
+| 上层需要读取对象状态 | `app_xxx.h` 中 `extern` 声明 | `extern bsp_motor_t Motor_Left;` 允许上层读取 `Motor_Left.encoder_speed` |
+| 上层需要传递对象指针 | APP层提供 Getter 函数 | `bsp_motor_t *Motor_Get_Left(void);` 返回指针，不暴露全局变量 |
+
+**铁律**：优先使用一次业务函数封装访问，`extern` 暴露是只读场景的最后手段。**绝对禁止** TASK 层直接修改 APP 层对象的结构体字段。
+
+---
+
+## 初始化顺序铁律
+
+系统初始化必须严格按 **BSP → APP → TASK** 的顺序执行，禁止跨层乱序：
+
+```c
+/* main.c - 初始化顺序铁律 */
+int main(void)
+{
+    /* 1. HAL 底层初始化（芯片厂商库） */
+    HAL_Init();
+    SystemClock_Config();
+
+    /* 2. APP层系统初始化（内部按序完成 BSP + APP 初始化） */
+    App_System_Init();
+    /* App_System_Init 内部执行顺序：
+     *   HW_Motor_Init(&Motor_Left);       // APP层硬件初始化
+     *   Bsp_Motor_Init_Device(&Motor_Left); // BSP层逻辑初始化
+     *   xMotorMutex = xSemaphoreCreateMutex(); // Mutex创建
+     */
+
+    /* 3. TASK层创建（必须在App_System_Init之后） */
+    Vision_Track_Task_Create();
+    Comm_Task_Create();
+    Display_Task_Create();
+
+    /* 4. 启动调度器 */
+    vTaskStartScheduler();
+
+    while (1)
+        ;
+}
+```
+
+| 顺序 | 阶段 | 允许 | 禁止 |
+|------|------|------|------|
+| 1 | HAL初始化 | 时钟、GPIO基础配置 | 调用任何BSP/APP函数 |
+| 2 | APP初始化 | HW_xxx硬件配置 + Bsp_xxx逻辑初始化 + Mutex创建 | 创建任务、启动调度器 |
+| 3 | TASK创建 | xTaskCreate创建任务壳 | 在创建前调用任务函数 |
+| 4 | 启动调度器 | vTaskStartScheduler | 在此之后执行任何非ISR代码 |
+
+---
+
 ## 设备状态枚举架构
 
 ```c
@@ -867,3 +1078,15 @@ void elog_port_get_time(char *buf, size_t size)
 7. **一次业务函数中包含阻塞调用**
    - 症状: APP 层函数中出现 `vTaskDelay` 或 `HAL_Delay`
    - 解决: 将阻塞调用移到 TASK 层的二次业务函数或任务壳中，APP 层绝对禁止阻塞
+
+8. **ISR 中直接调用业务函数**
+   - 症状: `USART1_IRQHandler` 中出现 `Motor_Pitch_Forward()` 或 `xQueueSend()`
+   - 解决: ISR 只做"读寄存器→清标志→抛事件"，业务逻辑通过 `xQueueSendFromISR` / `xTaskNotifyFromISR` 抛给 TASK 层处理
+
+9. **多任务竞争导致数据不一致**
+   - 症状: 电机输出抖动、传感器读数跳变，且该对象被多个 Task 调用
+   - 解决: 在 APP 层一次业务函数内部封装 Mutex 保护，对上层 TASK 透明
+
+10. **TASK层直接include BSP头文件**
+    - 症状: `xxx_task.c` 中出现 `#include "bsp_motor.h"` 或直接调用 `Bsp_Motor_Set_Speed()`
+    - 解决: TASK 层只能 include APP 层头文件，通过一次业务函数间接访问 BSP 层

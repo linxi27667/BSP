@@ -651,7 +651,7 @@ class RTTView(QWidget):
 
         # Create a wrapper widget to hold all existing content
         self.rttTab = QWidget()
-        rttLayout = QVBoxLayout(self.rttTab)
+        rttLayout = QtWidgets.QVBoxLayout(self.rttTab)
         rttLayout.setContentsMargins(0, 0, 0, 0)
         rttLayout.setSpacing(8)
 

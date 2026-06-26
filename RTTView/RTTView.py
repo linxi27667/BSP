@@ -145,6 +145,9 @@ class RTTView(QWidget):
         # ── Window icon ──
         icon = QtGui.QIcon('Image/serial.ico')
         self.setWindowIcon(icon)
+
+        # ── Tab widget: wrap existing content + new tool tabs ──
+        self._initTabs()
     
     def initSetting(self):
         if not os.path.exists('setting.ini'):
@@ -500,6 +503,34 @@ class RTTView(QWidget):
                 background-color: #444;
                 margin: 4px 8px;
             }
+
+            /* ═══ TabWidget ═══ */
+            QTabWidget::pane {
+                border: 1px solid #3C3C3C;
+                background-color: #1E1E1E;
+                border-radius: 4px;
+            }
+            QTabBar::tab {
+                background-color: #2D2D2D;
+                color: #888;
+                border: 1px solid #3C3C3C;
+                border-bottom: none;
+                padding: 6px 18px;
+                margin-right: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 10pt;
+            }
+            QTabBar::tab:selected {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                border-bottom: 2px solid #007ACC;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #383838;
+                color: #CCC;
+            }
         """
         self.setStyleSheet(dark_qss)
 
@@ -608,6 +639,38 @@ class RTTView(QWidget):
         hLayout.addItem(spacer)
 
         self.vLayout.addWidget(self._authorBar)
+
+    def _initTabs(self):
+        """Create QTabWidget, move existing RTT content into Tab 0, add new tool tabs."""
+        from widgets.register_viewer import RegisterViewer
+        from widgets.memory_viewer import MemoryViewer
+        from widgets.core_register_viewer import CoreRegisterViewer
+
+        # Create the tab widget
+        self.tabWidget = QtWidgets.QTabWidget(self)
+
+        # Create a wrapper widget to hold all existing content
+        self.rttTab = QWidget()
+        rttLayout = QVBoxLayout(self.rttTab)
+        rttLayout.setContentsMargins(0, 0, 0, 0)
+        rttLayout.setSpacing(8)
+
+        # Move all items from vLayout into rttTab's layout
+        while self.vLayout.count():
+            item = self.vLayout.takeAt(0)
+            rttLayout.addItem(item)
+
+        # Add tabs
+        self.tabWidget.addTab(self.rttTab, 'RTT终端')
+        self._regViewer = RegisterViewer()
+        self.tabWidget.addTab(self._regViewer, '寄存器')
+        self._memViewer = MemoryViewer()
+        self.tabWidget.addTab(self._memViewer, '内存')
+        self._coreRegViewer = CoreRegisterViewer()
+        self.tabWidget.addTab(self._coreRegViewer, '核心寄存器')
+
+        # Put the tab widget into the now-empty main layout
+        self.vLayout.addWidget(self.tabWidget)
 
     def _animateBuddy(self):
         """Animate buddy based on current state."""
@@ -1209,6 +1272,12 @@ class RTTView(QWidget):
                 self._connected = True
                 self._updateStatusBar(True)
 
+                # Pass probe to new tool tabs
+                self._regViewer.set_probe(probe)
+                self._memViewer.set_probe(probe)
+                arch_mode = 'arm' if mode.startswith('arm') else 'rv'
+                self._coreRegViewer.set_probe(probe, mode=arch_mode)
+
         else:
             if self.rcvfile and not self.rcvfile.closed:
                 self.rcvfile.close()
@@ -1224,6 +1293,11 @@ class RTTView(QWidget):
             self.btnOpen.setText('打开连接')
             self._connected = False
             self._updateStatusBar(False)
+
+            # Clear probe from tool tabs
+            self._regViewer.set_probe(None)
+            self._memViewer.set_probe(None)
+            self._coreRegViewer.set_probe(None)
     
     def aUpRead(self):
         data = self.xlk.read_mem_U8(self.aUpAddr, ctypes.sizeof(RingBuffer))
@@ -1339,6 +1413,13 @@ class RTTView(QWidget):
                 self.txtMain.append(f'[+] 重连成功: _SEGGER_RTT @ 0x{self.RTTAddr:08X}\n')
                 self.rtt_cb = True
                 self.rtt_fail_count = 0
+
+                # Update probe on tool tabs after reconnect
+                self._regViewer.set_probe(probe)
+                self._memViewer.set_probe(probe)
+                arch_mode = 'arm' if mode.startswith('arm') else 'rv'
+                self._coreRegViewer.set_probe(probe, mode=arch_mode)
+
                 return
 
         raise Exception('Can not find _SEGGER_RTT after reconnect')

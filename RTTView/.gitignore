@@ -104,3 +104,6 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Downloaded SVD files (large vendor assets)
+svd/

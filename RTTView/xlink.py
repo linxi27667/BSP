@@ -1,28 +1,193 @@
-import os
 import time
 import ctypes
-import operator
+
+from probes.base import DebugProbe
 
 
-import jlink
-import openocd
+class _LegacyAdapter(DebugProbe):
+    """Wrap legacy probe objects (jlink.JLink, openocd.OpenOCD, pyocd CortexM)
+    behind the DebugProbe interface.
+
+    Detection: pyocd CortexM is identified by having ``read_memory_block8``.
+    JLink and OpenOCD legacy objects already expose the same method names as
+    DebugProbe, so delegation is trivial.
+    """
+
+    def __init__(self, legacy):
+        self._legacy = legacy
+        self._is_pyocd = hasattr(legacy, 'read_memory_block8')
+        self._core_regs = {}
+        self._mode = 'arm'
+
+    # -- Lifecycle ------------------------------------------------
+
+    def open(self, mode='arm', core='Cortex-M0', speed=4000):
+        self._mode = mode.lower()
+        if self._is_pyocd:
+            # pyocd CortexM is already initialized by the caller
+            return
+        self._legacy.open(mode, core, speed)
+
+    def close(self):
+        if self._is_pyocd:
+            self._legacy.ap.dp.link.close()
+        else:
+            self._legacy.close()
+
+    # -- Memory Access --------------------------------------------
+
+    def read_mem_U8(self, addr, count):
+        if self._is_pyocd:
+            return list(self._legacy.read_memory_block8(addr, count))
+        return self._legacy.read_mem_U8(addr, count)
+
+    def read_mem_U16(self, addr, count):
+        if self._is_pyocd:
+            return [self._legacy.read16(addr + i * 2) for i in range(count)]
+        return self._legacy.read_mem_U16(addr, count)
+
+    def read_mem_U32(self, addr, count):
+        if self._is_pyocd:
+            return list(self._legacy.read_memory_block32(addr, count))
+        return self._legacy.read_mem_U32(addr, count)
+
+    def read_U32(self, addr):
+        if self._is_pyocd:
+            return self._legacy.read32(addr)
+        return self._legacy.read_U32(addr)
+
+    def write_U8(self, addr, val):
+        if self._is_pyocd:
+            self._legacy.write8(addr, val)
+        else:
+            self._legacy.write_U8(addr, val)
+
+    def write_U16(self, addr, val):
+        if self._is_pyocd:
+            self._legacy.write16(addr, val)
+        else:
+            self._legacy.write_U16(addr, val)
+
+    def write_U32(self, addr, val):
+        if self._is_pyocd:
+            self._legacy.write32(addr, val)
+        else:
+            self._legacy.write_U32(addr, val)
+
+    def write_mem_U8(self, addr, data):
+        if self._is_pyocd:
+            self._legacy.write_memory_block8(addr, data)
+        else:
+            self._legacy.write_mem_U8(addr, data)
+
+    def write_mem_U32(self, addr, data):
+        if self._is_pyocd:
+            self._legacy.write_memory_block32(addr, data)
+        else:
+            self._legacy.write_mem_U32(addr, data)
+
+    # -- Register Access ------------------------------------------
+
+    def read_reg(self, reg):
+        if self._is_pyocd:
+            return self._legacy.read_core_register_raw(reg)
+        return self._legacy.read_reg(reg.lower())
+
+    def read_regs(self, rlist):
+        if self._is_pyocd:
+            return dict(zip(rlist, self._legacy.read_core_registers_raw(rlist)))
+        return dict(zip(rlist, self._legacy.read_regs([r.lower() for r in rlist]).values()))
+
+    def write_reg(self, reg, val):
+        if self._is_pyocd:
+            self._legacy.write_core_register_raw(reg, val)
+        else:
+            self._legacy.write_reg(reg.lower(), val)
+
+    # -- CPU Control ----------------------------------------------
+
+    def halt(self):
+        self._legacy.halt()
+
+    def go(self):
+        if self._is_pyocd:
+            self._legacy.resume()
+        else:
+            self._legacy.go()
+
+    def step(self):
+        self._legacy.step()
+
+    def reset(self):
+        self._legacy.reset()
+
+    def halted(self):
+        if self._is_pyocd:
+            return self._legacy.is_halted()
+        return self._legacy.halted()
+
+    # -- Probe Info -----------------------------------------------
+
+    @property
+    def mode(self):
+        if self._is_pyocd:
+            return 'arm'
+        return getattr(self._legacy, 'mode', 'arm')
+
+    @property
+    def core_regs(self):
+        if self._is_pyocd:
+            return self._core_regs
+        return getattr(self._legacy, 'core_regs', self._core_regs)
+
+    @core_regs.setter
+    def core_regs(self, value):
+        if self._is_pyocd:
+            self._core_regs = value
+        else:
+            self._legacy.core_regs = value
+
+    # -- Convenience (not in ABC) ---------------------------------
+
+    def reset_and_halt(self):
+        if not self._is_pyocd and hasattr(self._legacy, 'reset') and hasattr(self._legacy, 'mode'):
+            # jlink: mode-dependent
+            if self._legacy.mode.startswith('rv'):
+                self._legacy.reset()
+            else:
+                self.resetStopOnReset()
+                self.write_reg('xpsr', 0x1000000)
+        else:
+            # pyocd CortexM: reset + halt
+            self.resetStopOnReset()
+            self.write_reg('xpsr', 0x1000000)
+
+    @property
+    def legacy(self):
+        """Access the wrapped legacy object (for backward compat)."""
+        return self._legacy
 
 
 class XLink(object):
-    def __init__(self, xlk):
-        self.xlk = xlk
+    """Facade that delegates all debug-probe operations.
 
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.reg_add_alias()
+    Accepts either a ``DebugProbe`` instance (new-style probes) or a legacy
+    probe object (jlink.JLink, openocd.OpenOCD, pyocd CortexM).  Legacy
+    objects are wrapped in ``_LegacyAdapter`` so the rest of the class can
+    call the ``DebugProbe`` interface uniformly -- no isinstance() dispatch.
+    """
+
+    def __init__(self, xlk):
+        if isinstance(xlk, DebugProbe):
+            self.xlk = xlk
+        else:
+            self.xlk = _LegacyAdapter(xlk)
+
+        self.reg_add_alias()
 
     def open(self, mode, core, speed):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.open(mode, core, speed)
-
-            self.reg_add_alias()
-            
-        else:
-            self.xlk.ap.dp.link.open()
+        self.xlk.open(mode, core, speed)
+        self.reg_add_alias()
 
     def reg_add_alias(self):
         def add_alias(regs, name1, name2, name3=None):
@@ -78,82 +243,47 @@ class XLink(object):
 
     @property
     def mode(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.mode
-        else:
-            return 'arm'
-    
+        return self.xlk.mode
+
     def write_U8(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_U8(addr, val)
-        else:
-            self.xlk.write8(addr, val)
+        self.xlk.write_U8(addr, val)
 
     def write_U16(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_U16(addr, val)
-        else:
-            self.xlk.write16(addr, val)
+        self.xlk.write_U16(addr, val)
 
     def write_U32(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_U32(addr, val)
-        else:
-            self.xlk.write32(addr, val)
+        self.xlk.write_U32(addr, val)
 
     def write_mem_U8(self, addr, data):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_mem_U8(addr, data)
-        else:
-            self.xlk.write_memory_block8(addr, data)
+        self.xlk.write_mem_U8(addr, data)
 
     def write_mem_U32(self, addr, data):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_mem_U32(addr, data)
-        else:
-            self.xlk.write_memory_block32(addr, data)
+        self.xlk.write_mem_U32(addr, data)
+
+    def write_mem(self, addr, data):
+        """Convenience: write raw bytes via write_mem_U8."""
+        self.xlk.write_mem_U8(addr, list(data))
 
     def read_mem_U8(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.read_mem_U8(addr, count)
-        else:
-            return self.xlk.read_memory_block8(addr, count)
+        return self.xlk.read_mem_U8(addr, count)
 
     def read_mem_U16(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.read_mem_U16(addr, count)
-        else:
-            return [self.xlk.read16(addr+i*2) for i in range(count)]
+        return self.xlk.read_mem_U16(addr, count)
 
     def read_mem_U32(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.read_mem_U32(addr, count)
-        else:
-            return self.xlk.read_memory_block32(addr, count)
+        return self.xlk.read_mem_U32(addr, count)
 
     def read_U32(self, addr):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.read_U32(addr)
-        else:
-            return self.xlk.read32(addr)
+        return self.xlk.read_U32(addr)
 
     def read_reg(self, reg):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.read_reg(reg.lower())
-        else:
-            return self.xlk.read_core_register_raw(reg)
+        return self.xlk.read_reg(reg)
 
     def read_regs(self, rlist):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return dict(zip(rlist, self.xlk.read_regs([reg.lower() for reg in rlist]).values()))
-        else:
-            return dict(zip(rlist, self.xlk.read_core_registers_raw(rlist)))
+        return self.xlk.read_regs(rlist)
 
     def write_reg(self, reg, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.write_reg(reg.lower(), val)
-        else:
-            self.xlk.write_core_register_raw(reg, val)
+        self.xlk.write_reg(reg, val)
 
     def reset(self):
         self.xlk.reset()
@@ -162,7 +292,7 @@ class XLink(object):
             self.xlk.write_reg('pc', 0)     # OpenOCD: resume from current code position.
             self.xlk.write_reg('dpc', 0)    # When resuming, PC is updated to value in dpc.
             self.go()
-    
+
     def halt(self):
         self.xlk.halt()
 
@@ -170,22 +300,13 @@ class XLink(object):
         self.xlk.step()
 
     def go(self):
-        if isinstance(self.xlk, jlink.JLink):
-            self.xlk.go()
-        else:
-            self.xlk.resume()
+        self.xlk.go()
 
     def halted(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            return self.xlk.halted()
-        else:
-            return self.xlk.is_halted()
+        return self.xlk.halted()
 
     def close(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD)):
-            self.xlk.close()
-        else:
-            self.xlk.ap.dp.link.close()
+        self.xlk.close()
 
     CORE_TYPE_NAME = {
         0xC20: "Cortex-M0",
@@ -206,11 +327,11 @@ class XLink(object):
             CPUID = 0xE000ED00
             CPUID_PARTNO_Pos = 4
             CPUID_PARTNO_Msk = 0x0000FFF0
-            
+
             cpuid = self.read_U32(CPUID)
 
             core_type = (cpuid & CPUID_PARTNO_Msk) >> CPUID_PARTNO_Pos
-            
+
             return self.CORE_TYPE_NAME[core_type]
 
         elif self.mode.startswith('rv'):
@@ -256,21 +377,13 @@ class XLink(object):
             return name
 
     def reset_and_halt(self):
-        if isinstance(self.xlk, openocd.OpenOCD):
-            self.xlk.reset(halt=True)
-
-        elif isinstance(self.xlk, jlink.JLink):
-            if self.mode.startswith('rv'):
-                self.xlk.reset()
-
-            else:   # arm
-                self.resetStopOnReset()
-                self.write_reg('xpsr', 0x1000000)   # set thumb bit in case the reset handler points to an ARM address
-
-        else:       # daplink only support arm
+        if hasattr(self.xlk, 'reset_and_halt'):
+            # _LegacyAdapter handles probe-specific logic
+            self.xlk.reset_and_halt()
+        else:
+            # DebugProbe: generic reset + halt
             self.resetStopOnReset()
             self.write_reg('xpsr', 0x1000000)
-
 
     #####################################################################
 

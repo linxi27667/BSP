@@ -182,8 +182,8 @@ class TaskViewer(QWidget):
             progress.setStyleSheet(self._progress_style(percent))
             self.table.setCellWidget(row, 3, progress)
 
-            # Stack Size
-            size_item = QTableWidgetItem(f"{task.stack_used} B")
+            # Stack Size (total allocation, not just used)
+            size_item = QTableWidgetItem(f"{task.stack_size} B")
             size_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 4, size_item)
 

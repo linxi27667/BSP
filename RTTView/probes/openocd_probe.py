@@ -9,8 +9,13 @@ from . import register_probe
 
 
 def _halt_required(func):
-    """Decorator: halt target before func, restore run-state after."""
+    """Decorator: halt target before func, restore run-state after.
+
+    Skipped when probe.auto_halt is False (e.g. oscilloscope live sampling).
+    """
     def wrapper(self, *args, **kwargs):
+        if not getattr(self, 'auto_halt', True):
+            return func(self, *args, **kwargs)
         was_halted = self.halted()
         if not was_halted:
             self.halt()
@@ -32,6 +37,7 @@ class OpenOCDProbe(DebugProbe):
         self._sock = None
         self._mode = 'arm'
         self._core_regs = {}
+        self.auto_halt = True  # set False for live monitoring (oscilloscope)
 
     # -- Lifecycle ------------------------------------------------
 

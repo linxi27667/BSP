@@ -1,4 +1,5 @@
 """Post-mortem crash analyzer for ARM Cortex-M targets."""
+from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox,
@@ -7,6 +8,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtGui import QFont
 
+import bisect
 import struct
 
 # -- Cortex-M fault register addresses ----------------------------------------
@@ -39,6 +41,7 @@ class CrashAnalyzer(QWidget):
         super().__init__(parent)
         self._probe = None
         self._elf_symbols: dict[int, str] = {}  # addr -> symbol name
+        self._sorted_addrs: list[int] = []  # sorted for bisect lookup
         self._init_ui()
 
     # ------------------------------------------------------------------
@@ -182,9 +185,7 @@ class CrashAnalyzer(QWidget):
         fault_values: dict[str, int] = {}
         for name, addr in fault_regs:
             try:
-                val = self._probe.read_mem_U32(addr, 1)
-                if isinstance(val, list):
-                    val = val[0]
+                val = self._probe.read_U32(addr)
                 fault_values[name] = val
                 report.append(f"  {name:>5s} ({addr:#010x}) = 0x{val:08X}")
             except Exception as e:
@@ -413,27 +414,25 @@ class CrashAnalyzer(QWidget):
                 if sym_name:
                     self._elf_symbols[st_value] = sym_name
 
+        # Pre-sort addresses for bisect-based lookup
+        self._sorted_addrs = sorted(self._elf_symbols.keys())
+
     # ------------------------------------------------------------------
     # Symbol resolution
     # ------------------------------------------------------------------
     def _resolve_symbol(self, addr: int) -> str:
-        """Resolve an address to the nearest symbol name."""
+        """Resolve an address to the nearest symbol name (O(log N) via bisect)."""
         if not self._elf_symbols:
             return ""
-        # Exact match
         if addr in self._elf_symbols:
             return self._elf_symbols[addr]
-        # Nearest lower symbol (within 4KB)
-        best_addr = 0
-        best_name = ""
-        for sym_addr, sym_name in self._elf_symbols.items():
-            if sym_addr <= addr and (addr - sym_addr) < 0x1000:
-                if sym_addr > best_addr:
-                    best_addr = sym_addr
-                    best_name = sym_name
-        if best_name:
-            offset = addr - best_addr
-            return f"{best_name}+0x{offset:X}"
+        # Find the nearest symbol <= addr
+        idx = bisect.bisect_right(self._sorted_addrs, addr) - 1
+        if idx < 0:
+            return ""
+        sym_addr = self._sorted_addrs[idx]
+        if addr - sym_addr < 0x1000:
+            return f"{self._elf_symbols[sym_addr]}+0x{addr - sym_addr:X}"
         return ""
 
     # ------------------------------------------------------------------

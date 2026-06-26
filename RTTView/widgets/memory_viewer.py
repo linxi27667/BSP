@@ -1,4 +1,5 @@
 """Hex memory viewer with region coloring and auto-refresh."""
+from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,

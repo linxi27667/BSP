@@ -1,4 +1,5 @@
 """Core register viewer with xPSR / mstatus decoding."""
+from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,

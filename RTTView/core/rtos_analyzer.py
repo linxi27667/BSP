@@ -63,10 +63,11 @@ class TaskInfo:
     name: str
     state: int          # 0=Running, 1=Ready, 2=Blocked, 3=Suspended, 4=Deleted
     priority: int
-    stack_base: int     # pxStack (bottom of allocated stack)
+    stack_base: int     # pxStack (bottom of allocated stack, lowest address)
     stack_end: int      # pxTopOfStack (current top)
-    stack_used: int     # stack_base - pxTopOfStack  (high-water-mark delta)
+    stack_used: int     # stack_end - stack_base  (high-water-mark delta)
     tcb_addr: int       # address of the TCB in MCU RAM
+    stack_limit: int = 0  # top of allocation (0xA5A5A5A5 watermark boundary)
 
     @property
     def state_name(self) -> str:
@@ -74,9 +75,11 @@ class TaskInfo:
 
     @property
     def stack_size(self) -> int:
-        """Total stack size in bytes (requires pxEndOfStack which we
-        don't always have; return high-water-mark usage as fallback)."""
-        return self.stack_used  # caller may override if pxEndOfStack known
+        """Total stack size in bytes.  Uses the 0xA5A5A5A5 watermark
+        boundary if available, otherwise falls back to stack_used."""
+        if self.stack_limit > self.stack_base:
+            return self.stack_limit - self.stack_base
+        return self.stack_used  # fallback: show bytes, not percentage
 
     @property
     def stack_usage_percent(self) -> float:
@@ -109,6 +112,27 @@ def _read_u32(probe, addr: int) -> int:
     return probe.read_U32(addr)
 
 
+_STACK_WATERMARK = 0xA5A5A5A5
+
+
+def _scan_stack_limit(probe, stack_base: int, max_scan: int = 4096) -> int:
+    """Scan upward from *stack_base* for the end of the 0xA5A5A5A5 watermark.
+
+    Returns the first address that does NOT contain 0xA5, i.e. the top of
+    the stack allocation.  Falls back to 0 if the scan fails.
+    """
+    try:
+        step = 64  # read 64 words (256 bytes) at a time
+        for offset in range(0, max_scan, step * 4):
+            words = probe.read_mem_U32(stack_base + offset, step)
+            for i, w in enumerate(words):
+                if w != _STACK_WATERMARK:
+                    return stack_base + offset + i * 4
+    except Exception:
+        pass
+    return 0
+
+
 # ------------------------------------------------------------------ #
 #  FreeRTOSAnalyzer
 # ------------------------------------------------------------------ #
@@ -126,6 +150,7 @@ class FreeRTOSAnalyzer:
     def __init__(self, probe, mode: str = 'arm'):
         self.probe = probe
         self.mode = mode
+        self._current_tcb_cache: int = 0  # resolved once in read_tasks
 
     # ------------------------------------------------------------------ #
     #  Locate pxCurrentTCB
@@ -149,7 +174,7 @@ class FreeRTOSAnalyzer:
         Returns the address of pxCurrentTCB in SRAM, or None.
         """
         try:
-            words = probe = self.probe.read_mem_U32(search_addr, search_len // 4)
+            words = self.probe.read_mem_U32(search_addr, search_len // 4)
         except Exception:
             return None
 
@@ -207,6 +232,9 @@ class FreeRTOSAnalyzer:
         current_tcb = _read_u32(self.probe, tcb_ptr_addr)
         if current_tcb == 0:
             return []
+
+        # Cache for _infer_state so it doesn't re-scan SRAM per task
+        self._current_tcb_cache = current_tcb
 
         tasks: List[TaskInfo] = []
         visited: set[int] = set()
@@ -268,6 +296,9 @@ class FreeRTOSAnalyzer:
             # (positive when stack has been used).
             stack_used = max(0, px_stack - px_top) if px_stack > px_top else 0
 
+            # Scan for 0xA5A5A5A5 watermark to find true stack limit
+            stack_limit = _scan_stack_limit(self.probe, px_stack)
+
             return TaskInfo(
                 name=name,
                 state=state,
@@ -276,6 +307,7 @@ class FreeRTOSAnalyzer:
                 stack_end=px_top,
                 stack_used=stack_used,
                 tcb_addr=tcb_addr,
+                stack_limit=stack_limit,
             )
         except Exception:
             return None
@@ -293,12 +325,9 @@ class FreeRTOSAnalyzer:
         - Fallback -> READY
         """
         try:
-            # Check if this is the current TCB
-            tcb_ptr_addr = self.find_current_tcb()
-            if tcb_ptr_addr is not None:
-                current_tcb = _read_u32(self.probe, tcb_ptr_addr)
-                if current_tcb == tcb_addr:
-                    return TASK_STATE_RUNNING
+            # Check if this is the current TCB (cached from read_tasks)
+            if self._current_tcb_cache and self._current_tcb_cache == tcb_addr:
+                return TASK_STATE_RUNNING
 
             # Check xEventListItem.pvContainer
             # xEventListItem is at offset 0x18 from TCB base

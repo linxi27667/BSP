@@ -1,4 +1,5 @@
 """Flash programmer widget for STM32 / ARM Cortex-M targets."""
+from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
@@ -82,7 +83,7 @@ class FlashProgrammer(QWidget):
         # -- Operation buttons ------------------------------------------
         btn_row = QHBoxLayout()
 
-        self.btn_erase = QPushButton("Erase")
+        self.btn_erase = QPushButton("Reset MCU")
         self.btn_erase.setFixedWidth(100)
         self.btn_erase.clicked.connect(self._on_erase)
         self.btn_erase.setEnabled(False)
@@ -179,16 +180,18 @@ class FlashProgrammer(QWidget):
 
     @pyqtSlot()
     def _on_erase(self):
-        """Erase flash sectors."""
+        """Reset MCU via AIRCR SYSRESETREQ (Cortex-M standard)."""
         if not self._probe:
             self._log("No probe connected.", error=True)
             return
-        self._log("Erasing flash...")
+        self._log("Resetting MCU via SYSRESETREQ...")
         try:
-            self._probe.erase_chip()
-            self._log("Erase complete.", ok=True)
+            # AIRCR: Application Interrupt and Reset Control Register
+            # VECTKEY=0x05FA, SYSRESETREQ=bit 2
+            self._probe.write_U32(0xE000ED0C, 0x05FA0004)
+            self._log("MCU reset complete.", ok=True)
         except Exception as e:
-            self._log(f"Erase failed: {e}", error=True)
+            self._log(f"Reset failed: {e}", error=True)
 
     @pyqtSlot()
     def _on_flash(self):

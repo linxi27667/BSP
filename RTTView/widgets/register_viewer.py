@@ -1,4 +1,5 @@
 """SVD-based peripheral register viewer with live MCU value reading."""
+from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog,

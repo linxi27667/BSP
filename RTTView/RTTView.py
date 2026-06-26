@@ -645,6 +645,11 @@ class RTTView(QWidget):
         from widgets.register_viewer import RegisterViewer
         from widgets.memory_viewer import MemoryViewer
         from widgets.core_register_viewer import CoreRegisterViewer
+        from widgets.oscilloscope import Oscilloscope
+        from widgets.swo_console import SWOConsole
+        from widgets.task_viewer import TaskViewer
+        from widgets.crash_analyzer import CrashAnalyzer
+        from widgets.flash_programmer import FlashProgrammer
 
         # Create the tab widget
         self.tabWidget = QtWidgets.QTabWidget(self)
@@ -668,9 +673,32 @@ class RTTView(QWidget):
         self.tabWidget.addTab(self._memViewer, '内存')
         self._coreRegViewer = CoreRegisterViewer()
         self.tabWidget.addTab(self._coreRegViewer, '核心寄存器')
+        self._oscilloscope = Oscilloscope()
+        self.tabWidget.addTab(self._oscilloscope, '示波器')
+        self._swoConsole = SWOConsole()
+        self.tabWidget.addTab(self._swoConsole, 'SWO跟踪')
+        self._taskViewer = TaskViewer()
+        self.tabWidget.addTab(self._taskViewer, 'RTOS任务')
+        self._crashAnalyzer = CrashAnalyzer()
+        self.tabWidget.addTab(self._crashAnalyzer, '崩溃分析')
+        self._flashProgrammer = FlashProgrammer()
+        self.tabWidget.addTab(self._flashProgrammer, 'Flash烧录')
 
         # Put the tab widget into the now-empty main layout
         self.vLayout.addWidget(self.tabWidget)
+
+    def _wire_probe(self, probe, mode=None):
+        """Pass probe (or None) to all tabs that support set_probe."""
+        from widgets.core_register_viewer import CoreRegisterViewer
+        from widgets.task_viewer import TaskViewer
+        for i in range(self.tabWidget.count()):
+            widget = self.tabWidget.widget(i)
+            if hasattr(widget, 'set_probe'):
+                if isinstance(widget, (CoreRegisterViewer, TaskViewer)):
+                    arch_mode = 'arm' if mode and mode.startswith('arm') else 'rv'
+                    widget.set_probe(probe, mode=arch_mode)
+                else:
+                    widget.set_probe(probe)
 
     def _animateBuddy(self):
         """Animate buddy based on current state."""
@@ -1272,11 +1300,8 @@ class RTTView(QWidget):
                 self._connected = True
                 self._updateStatusBar(True)
 
-                # Pass probe to new tool tabs
-                self._regViewer.set_probe(probe)
-                self._memViewer.set_probe(probe)
-                arch_mode = 'arm' if mode.startswith('arm') else 'rv'
-                self._coreRegViewer.set_probe(probe, mode=arch_mode)
+                # Pass probe to all tool tabs
+                self._wire_probe(probe, mode)
 
         else:
             if self.rcvfile and not self.rcvfile.closed:
@@ -1294,10 +1319,8 @@ class RTTView(QWidget):
             self._connected = False
             self._updateStatusBar(False)
 
-            # Clear probe from tool tabs
-            self._regViewer.set_probe(None)
-            self._memViewer.set_probe(None)
-            self._coreRegViewer.set_probe(None)
+            # Clear probe from all tool tabs
+            self._wire_probe(None)
     
     def aUpRead(self):
         data = self.xlk.read_mem_U8(self.aUpAddr, ctypes.sizeof(RingBuffer))
@@ -1414,11 +1437,8 @@ class RTTView(QWidget):
                 self.rtt_cb = True
                 self.rtt_fail_count = 0
 
-                # Update probe on tool tabs after reconnect
-                self._regViewer.set_probe(probe)
-                self._memViewer.set_probe(probe)
-                arch_mode = 'arm' if mode.startswith('arm') else 'rv'
-                self._coreRegViewer.set_probe(probe, mode=arch_mode)
+                # Update probe on all tool tabs after reconnect
+                self._wire_probe(probe, mode)
 
                 return
 

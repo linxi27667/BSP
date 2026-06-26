@@ -210,23 +210,23 @@ class Oscilloscope(QWidget):
         self.chart.setBackgroundBrush(QColor("#1E1E1E"))
         self.chart.setTitleBrush(QColor("#D4D4D4"))
         self.chart.setTitle("Oscilloscope")
-        self.chart.legend().setLabelColor("#D4D4D4")
+        self.chart.legend().setLabelColor(QColor("#D4D4D4"))
         self.chart.legend().setVisible(True)
-        self.chart.setAnimationOptions(QChart.NoAnimations)
+        self.chart.setAnimationOptions(QChart.NoAnimation)
 
         # Axes
         self._axis_x = QValueAxis()
         self._axis_x.setTitleText("Samples")
         self._axis_x.setTitleBrush(QColor("#D4D4D4"))
         self._axis_x.setLabelsBrush(QColor("#D4D4D4"))
-        self._axis_x.setGridLineColor("#3C3C3C")
+        self._axis_x.setGridLineColor(QColor("#3C3C3C"))
         self._axis_x.setRange(0, DIVISIONS * 100)
 
         self._axis_y = QValueAxis()
         self._axis_y.setTitleText("Value")
         self._axis_y.setTitleBrush(QColor("#D4D4D4"))
         self._axis_y.setLabelsBrush(QColor("#D4D4D4"))
-        self._axis_y.setGridLineColor("#3C3C3C")
+        self._axis_y.setGridLineColor(QColor("#3C3C3C"))
         self._axis_y.setRange(-100, 100)
 
         self.chart.addAxis(self._axis_x, Qt.AlignBottom)

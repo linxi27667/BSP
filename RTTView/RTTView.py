@@ -16,8 +16,11 @@ from PyQt5.QtCore import pyqtSlot, pyqtSignal, Qt
 from PyQt5.QtWidgets import QApplication, QWidget, QDialog, QFileDialog, QTableWidgetItem
 from PyQt5.QtChart import QChart, QChartView, QLineSeries
 
-import jlink
 import xlink
+from probes.jlink_probe import JLinkProbe
+from probes.stlink_probe import STLinkProbe
+from probes.daplink_probe import DAPLinkProbe
+from probes.openocd_probe import OpenOCDProbe
 
 
 os.environ['PATH'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'libusb-1.0.24/MinGW64/dll') + os.pathsep + os.environ['PATH']
@@ -164,7 +167,7 @@ class RTTView(QWidget):
 
         self.cmbDLL.addItem(self.conf.get('link', 'jlink'), 'jlink')
         self.cmbDLL.addItem('OpenOCD Tcl RPC (6666)', 'openocd')
-        self.daplink_detect()    # add DAPLink
+        self.probe_detect()    # add ST-Link and DAPLink
 
         self.cmbDLL.setCurrentIndex(zero_if(self.cmbDLL.findText(self.conf.get('link', 'select'))))
 
@@ -1100,19 +1103,34 @@ class RTTView(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-    def daplink_detect(self):
+    def probe_detect(self):
+        # Detect ST-Link probes
         try:
-            from pyocd.probe import aggregator
-            self.daplinks = aggregator.DebugProbeAggregator.get_all_connected_probes()
-        except Exception as e:
-            self.daplinks = []
+            self._stlink_probes = STLinkProbe.detect()
+        except Exception:
+            self._stlink_probes = []
 
-        if len(self.daplinks) != self.cmbDLL.count() - 2:
-            for i in range(2, self.cmbDLL.count()):
+        # Detect DAPLink probes
+        try:
+            self._daplink_probes = DAPLinkProbe.detect()
+        except Exception:
+            self._daplink_probes = []
+
+        # Count expected items: 2 (J-Link + OpenOCD) + ST-Links + DAPLinks
+        expected = 2 + len(self._stlink_probes) + len(self._daplink_probes)
+
+        if expected != self.cmbDLL.count():
+            # Remove all items after the first 2 (J-Link and OpenOCD)
+            while self.cmbDLL.count() > 2:
                 self.cmbDLL.removeItem(2)
 
-            for i, daplink in enumerate(self.daplinks):
-                self.cmbDLL.addItem(f'{daplink.product_name} ({daplink.unique_id})', i)
+            # Add ST-Link probes
+            for i, (dev, name) in enumerate(self._stlink_probes):
+                self.cmbDLL.addItem(name, ('stlink', i))
+
+            # Add DAPLink probes
+            for i, probe in enumerate(self._daplink_probes):
+                self.cmbDLL.addItem(f'{probe.product_name} ({probe.unique_id})', ('daplink', i))
     
     @pyqtSlot()
     def on_btnOpen_clicked(self):
@@ -1123,28 +1141,21 @@ class RTTView(QWidget):
             speed= int(self.cmbSpeed.currentText().split()[0]) * 1000 # KHz
             try:
                 item_data = self.cmbDLL.currentData()
+                probe = None
 
                 if item_data == 'jlink':
-                    self.xlk = xlink.XLink(jlink.JLink(self.cmbDLL.currentText(), mode, core, speed))
-                
+                    probe = JLinkProbe(dllpath=self.cmbDLL.currentText())
                 elif item_data == 'openocd':
-                    import openocd
-                    self.xlk = xlink.XLink(openocd.OpenOCD(mode=mode, core=core, speed=speed))
-                
-                else:
-                    from pyocd.coresight import dap, ap, cortex_m
-                    daplink = self.daplinks[item_data]
-                    daplink.open()
+                    probe = OpenOCDProbe()
+                elif isinstance(item_data, tuple) and item_data[0] == 'stlink':
+                    dev = self._stlink_probes[item_data[1]][0]
+                    probe = STLinkProbe(device=dev)
+                elif isinstance(item_data, tuple) and item_data[0] == 'daplink':
+                    raw_probe = self._daplink_probes[item_data[1]]
+                    probe = DAPLinkProbe(probe=raw_probe)
 
-                    _dp = dap.DebugPort(daplink, None)
-                    _dp.init()
-                    _dp.power_up_debug()
-                    _dp.set_clock(speed * 1000)
-
-                    _ap = ap.AHB_AP(_dp, 0)
-                    _ap.init()
-
-                    self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
+                probe.open(mode=mode, core=core, speed=speed)
+                self.xlk = xlink.XLink(probe)
                 
                 if self.chkSave.isChecked():
                     savfile, ext = os.path.splitext(self.linFile.text())
@@ -1184,7 +1195,8 @@ class RTTView(QWidget):
                     self.xlk.close()
                 except:
                     try:
-                        daplink.close()
+                        if probe:
+                            probe.close()
                     except:
                         pass
 
@@ -1278,35 +1290,36 @@ class RTTView(QWidget):
         return bytes(data)
 
     def _auto_reconnect(self):
-        """Auto-reconnect after MCU reset. Re-establishes SWD link and re-scans for _SEGGER_RTT."""
+        """Auto-reconnect after MCU reset. Re-establishes link and re-scans for _SEGGER_RTT."""
         try:
             self.xlk.close()
         except:
             pass
-        self.daplink_detect()
 
-        from pyocd.coresight import dap, ap, cortex_m
+        mode = self.cmbMode.currentText()
+        mode = mode.replace(' SWD', '').replace(' cJTAG', '').replace(' JTAG', 'J').lower()
+        core = 'Cortex-M0' if mode.startswith('arm') else 'RISC-V'
+        speed = int(self.cmbSpeed.currentText().split()[0]) * 1000
 
-        daplink_index = None
-        for i in range(self.cmbDLL.count()):
-            if self.cmbDLL.itemData(i) not in ('jlink', 'openocd'):
-                daplink_index = i
-                break
-        if daplink_index is None:
-            raise Exception('No DAPLink found')
+        self.probe_detect()
 
-        self.cmbDLL.setCurrentIndex(daplink_index)
-        daplink = self.daplinks[self.cmbDLL.currentData()]
-        daplink.open()
+        item_data = self.cmbDLL.currentData()
 
-        _dp = dap.DebugPort(daplink, None)
-        _dp.init()
-        _dp.power_up_debug()
+        if item_data == 'jlink':
+            probe = JLinkProbe(dllpath=self.cmbDLL.currentText())
+        elif item_data == 'openocd':
+            probe = OpenOCDProbe()
+        elif isinstance(item_data, tuple) and item_data[0] == 'stlink':
+            dev = self._stlink_probes[item_data[1]][0]
+            probe = STLinkProbe(device=dev)
+        elif isinstance(item_data, tuple) and item_data[0] == 'daplink':
+            raw_probe = self._daplink_probes[item_data[1]]
+            probe = DAPLinkProbe(probe=raw_probe)
+        else:
+            raise Exception('No probe available for reconnect')
 
-        _ap = ap.AHB_AP(_dp, 0)
-        _ap.init()
-
-        self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
+        probe.open(mode=mode, core=core, speed=speed)
+        self.xlk = xlink.XLink(probe)
 
         search_addr_text = self.cmbAddr.currentText()
         if re.match(r'0[xX][0-9a-fA-F]{8}', search_addr_text):
@@ -1471,7 +1484,7 @@ class RTTView(QWidget):
 
         else:
             if self.tmrRTT_Cnt % 100 == 1:
-                self.daplink_detect()
+                self.probe_detect()
 
             if self.tmrRTT_Cnt % 100 == 2:
                 path = self.cmbAddr.currentText()

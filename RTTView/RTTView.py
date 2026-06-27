@@ -660,10 +660,27 @@ class RTTView(QWidget):
         rttLayout.setContentsMargins(0, 0, 0, 0)
         rttLayout.setSpacing(8)
 
-        # Move all items from vLayout into rttTab's layout
+        # Move all items from vLayout into rttTab's layout.
+        # We must use addWidget() (not addItem) so Qt reparents each
+        # widget to self.rttTab — otherwise they stay parented to the
+        # main window and the tab renders blank.
+        widgets = []
         while self.vLayout.count():
             item = self.vLayout.takeAt(0)
-            rttLayout.addItem(item)
+            w = item.widget()
+            if w:
+                widgets.append(w)
+            else:
+                # Layout or spacer — take the layout's widgets too
+                lay = item.layout()
+                if lay:
+                    while lay.count():
+                        sub = lay.takeAt(0)
+                        sw = sub.widget()
+                        if sw:
+                            widgets.append(sw)
+        for w in widgets:
+            rttLayout.addWidget(w)
 
         # Add tabs
         self.tabWidget.addTab(self.rttTab, 'RTT终端')

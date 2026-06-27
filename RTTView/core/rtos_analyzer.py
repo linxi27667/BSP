@@ -115,22 +115,54 @@ def _read_u32(probe, addr: int) -> int:
 _STACK_WATERMARK = 0xA5A5A5A5
 
 
-def _scan_stack_limit(probe, stack_base: int, max_scan: int = 4096) -> int:
-    """Scan upward from *stack_base* for the end of the 0xA5A5A5A5 watermark.
+def _find_end_of_stack(probe, tcb_addr: int, px_stack: int) -> int:
+    """Try to read pxEndOfStack from the TCB.
 
-    Returns the first address that does NOT contain 0xA5, i.e. the top of
-    the stack allocation.  Falls back to 0 if the scan fails.
+    FreeRTOS stores pxEndOfStack at an offset that depends on the version
+    and config options (typically after pcTaskName).  We probe a handful of
+    candidate offsets and return the first value that looks sane:
+    above *px_stack* and within a reasonable range (256 B – 64 KB).
+
+    Returns 0 if no plausible value is found.
+    """
+    # Candidates: common offsets after pcTaskName (16-byte name assumed)
+    # 0x44 (name@0x34), 0x48, 0x4C, 0x50, 0x54, 0x58
+    candidates = [0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, 0x5C, 0x60]
+    for off in candidates:
+        try:
+            val = probe.read_U32(tcb_addr + off)
+            # Sanity: must be above px_stack, within 256 B – 64 KB
+            if px_stack < val <= px_stack + 0x10000 and val > px_stack + 0x100:
+                return val
+        except Exception:
+            continue
+    return 0
+
+
+def _scan_stack_watermark(probe, stack_base: int, max_scan: int = 4096) -> int:
+    """Estimate stack limit by counting the leading 0xA5 watermark.
+
+    On Cortex-M (stack grows DOWN), FreeRTOS fills the stack with 0xA5.
+    The watermark remains in the UNTOUCHED region at the low end (near
+    pxStack).  We count consecutive 0xA5 words from *stack_base* upward
+    and return ``stack_base + watermark_bytes``.
+
+    This underestimates the total allocation (misses any watermark above
+    the used area), but is useful as a fallback when pxEndOfStack is not
+    available.
     """
     try:
-        step = 64  # read 64 words (256 bytes) at a time
+        step = 64
+        watermark_end = stack_base  # assume no watermark initially
         for offset in range(0, max_scan, step * 4):
             words = probe.read_mem_U32(stack_base + offset, step)
             for i, w in enumerate(words):
                 if w != _STACK_WATERMARK:
                     return stack_base + offset + i * 4
+            watermark_end = stack_base + offset + step * 4
+        return watermark_end  # all watermark up to max_scan
     except Exception:
-        pass
-    return 0
+        return 0
 
 
 # ------------------------------------------------------------------ #
@@ -291,13 +323,17 @@ class FreeRTOSAnalyzer:
             # For now, read xEventListItem to detect blocked/suspended.
             state = self._infer_state(tcb_addr)
 
-            # Stack usage: pxStack is bottom, pxTopOfStack is current top.
-            # On Cortex-M stack grows DOWN, so usage = pxStack - pxTopOfStack
-            # (positive when stack has been used).
-            stack_used = max(0, px_stack - px_top) if px_stack > px_top else 0
+            # Try to read pxEndOfStack from the TCB.  Its offset varies by
+            # FreeRTOS version; scan a few candidate positions after pcTaskName.
+            stack_limit = _find_end_of_stack(self.probe, tcb_addr, px_stack)
 
-            # Scan for 0xA5A5A5A5 watermark to find true stack limit
-            stack_limit = _scan_stack_limit(self.probe, px_stack)
+            # stack_used: on Cortex-M stack grows DOWN.
+            #   pxStack = lowest address (base), pxTopOfStack = current SP.
+            #   used = stack_limit - pxTopOfStack  (consumed from the top down).
+            if stack_limit and stack_limit > px_top:
+                stack_used = stack_limit - px_top
+            else:
+                stack_used = max(0, px_top - px_stack)
 
             return TaskInfo(
                 name=name,

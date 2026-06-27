@@ -9,16 +9,15 @@ from PyQt5.QtWidgets import (
     QHeaderView, QFileDialog, QAbstractItemView,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor
 
 from core.swo_decoder import SWODecoder, decode_itm_string
-
-
-# -- Style constants (dark-theme, matching oscilloscope.py) -------------------
-COLOR_VALUE   = '#B5CEA8'   # green  - values
-COLOR_DESC    = '#6A9955'   # dim green - descriptions
-COLOR_CHANGED = '#FF6B6B'   # red    - changed / warning
-COLOR_ACCENT  = '#4FC3F7'   # blue   - accent
+from widgets.styles import (
+    BG_DARK, BG_HEADER, BORDER, TEXT,
+    NUMBER, COMMENT, RED, CYAN,
+    FONT_MONO, FONT_SIZE,
+    toolbar_style, table_style, text_edit_style,
+)
 
 SWO_POLL_MS = 10  # 10ms polling interval
 MAX_ITM_LINES = 5000  # max lines in ITM output
@@ -85,27 +84,27 @@ class SWOConsole(QWidget):
         # -- Toolbar ----------------------------------------------------
         toolbar = QHBoxLayout()
 
-        self.btn_start = QPushButton("Start")
+        self.btn_start = QPushButton("开始")
         self.btn_start.setFixedWidth(70)
         self.btn_start.clicked.connect(self._toggle_running)
 
-        self.btn_clear = QPushButton("Clear")
+        self.btn_clear = QPushButton("清空")
         self.btn_clear.setFixedWidth(70)
         self.btn_clear.clicked.connect(self._clear_all)
 
-        self.btn_load_elf = QPushButton("Load ELF")
+        self.btn_load_elf = QPushButton("加载ELF...")
         self.btn_load_elf.setFixedWidth(80)
         self.btn_load_elf.clicked.connect(self._load_elf_dialog)
 
-        self.lbl_status = QLabel("SWO: Stopped")
+        self.lbl_status = QLabel("SWO: 已停止")
         self.lbl_status.setStyleSheet(
-            f"color: {COLOR_DESC}; font-size: 12px; padding: 2px 8px;"
+            f"color: {COMMENT}; font-size: 12px; padding: 2px 8px;"
         )
 
         self.lbl_stats = QLabel("")
         self.lbl_stats.setStyleSheet(
-            f"color: {COLOR_VALUE}; font-family: Consolas, monospace;"
-            " font-size: 11px; padding: 2px 8px;"
+            f"color: {NUMBER}; font-family: {FONT_MONO}, monospace;"
+            f" font-size: {FONT_SIZE}; padding: 2px 8px;"
         )
 
         for w in (self.btn_start, self.btn_clear, self.btn_load_elf,
@@ -121,14 +120,13 @@ class SWOConsole(QWidget):
         # Tab 1: ITM Output
         self.txt_itm = QTextEdit()
         self.txt_itm.setReadOnly(True)
-        self.txt_itm.setFont(QFont("Consolas", 11))
-        self.txt_itm.setStyleSheet(self._text_style())
-        self.tabs.addTab(self.txt_itm, "ITM Output")
+        self.txt_itm.setStyleSheet(text_edit_style())
+        self.tabs.addTab(self.txt_itm, "SWO控制台")
 
         # Tab 2: CPU Sampling
         self.tbl_profiler = QTableWidget(0, 4)
         self.tbl_profiler.setHorizontalHeaderLabels(
-            ["Function", "Address", "Samples", "CPU%"]
+            ["函数", "地址", "采样数", "CPU%"]
         )
         self.tbl_profiler.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.Stretch
@@ -136,73 +134,39 @@ class SWOConsole(QWidget):
         self.tbl_profiler.verticalHeader().setVisible(False)
         self.tbl_profiler.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tbl_profiler.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._apply_table_style()
-        self.tabs.addTab(self.tbl_profiler, "CPU Sampling")
+        self.tbl_profiler.setStyleSheet(table_style())
+        self.tabs.addTab(self.tbl_profiler, "CPU分析")
 
         # Tab 3: Exception Tracking
         self.txt_exc = QTextEdit()
         self.txt_exc.setReadOnly(True)
-        self.txt_exc.setFont(QFont("Consolas", 11))
-        self.txt_exc.setStyleSheet(self._text_style())
-        self.tabs.addTab(self.txt_exc, "Exception Tracking")
+        self.txt_exc.setStyleSheet(text_edit_style())
+        self.tabs.addTab(self.txt_exc, "异常跟踪")
 
         layout.addWidget(self.tabs, stretch=1)
 
-    def _apply_table_style(self):
-        self.tbl_profiler.setStyleSheet("""
-            QTableWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #252526;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 3px;
-            }
-        """)
-
     @staticmethod
     def _tab_style():
-        return """
-            QTabWidget::pane {
-                border: 1px solid #3C3C3C;
-                background-color: #1E1E1E;
-            }
-            QTabBar::tab {
-                background-color: #2D2D2D;
-                color: #D4D4D4;
+        return f"""
+            QTabWidget::pane {{
+                border: 1px solid {BORDER};
+                background-color: {BG_DARK};
+            }}
+            QTabBar::tab {{
+                background-color: {BG_HEADER};
+                color: {TEXT};
                 padding: 6px 16px;
-                border: 1px solid #3C3C3C;
+                border: 1px solid {BORDER};
                 border-bottom: none;
                 margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #1E1E1E;
-                border-bottom: 2px solid #4FC3F7;
-            }
-            QTabBar::tab:hover {
+            }}
+            QTabBar::tab:selected {{
+                background-color: {BG_DARK};
+                border-bottom: 2px solid {CYAN};
+            }}
+            QTabBar::tab:hover {{
                 background-color: #383838;
-            }
-        """
-
-    @staticmethod
-    def _text_style():
-        return """
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-            }
+            }}
         """
 
     # ------------------------------------------------------------------
@@ -284,22 +248,22 @@ class SWOConsole(QWidget):
         try:
             self._probe.swo_start(speed=2000000)  # 2 MHz default
         except NotImplementedError:
-            self.lbl_status.setText("SWO: Not supported by probe")
+            self.lbl_status.setText("SWO: 探针不支持")
             return
         except Exception:
-            self.lbl_status.setText("SWO: Start failed")
+            self.lbl_status.setText("SWO: 启动失败")
             return
 
         self._running = True
-        self.btn_start.setText("Stop")
-        self.lbl_status.setText("SWO: Running")
+        self.btn_start.setText("停止")
+        self.lbl_status.setText("SWO: 运行中")
         self._timer.start()
 
     def _stop(self):
         self._running = False
         self._timer.stop()
-        self.btn_start.setText("Start")
-        self.lbl_status.setText("SWO: Stopped")
+        self.btn_start.setText("开始")
+        self.lbl_status.setText("SWO: 已停止")
         if self._probe:
             try:
                 self._probe.swo_stop()
@@ -419,25 +383,25 @@ class SWOConsole(QWidget):
 
             # Function name
             name_item = QTableWidgetItem(name)
-            name_item.setForeground(QColor(COLOR_ACCENT))
+            name_item.setForeground(QColor(CYAN))
             self.tbl_profiler.setItem(row, 0, name_item)
 
             # Address
             addr_item = QTableWidgetItem(f"0x{addr:08X}")
-            addr_item.setForeground(QColor(COLOR_VALUE))
+            addr_item.setForeground(QColor(NUMBER))
             addr_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tbl_profiler.setItem(row, 1, addr_item)
 
             # Samples
             count_item = QTableWidgetItem(str(count))
-            count_item.setForeground(QColor(COLOR_VALUE))
+            count_item.setForeground(QColor(NUMBER))
             count_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tbl_profiler.setItem(row, 2, count_item)
 
             # CPU%
             pct_item = QTableWidgetItem(f"{pct:.1f}%")
             pct_item.setForeground(
-                QColor(COLOR_CHANGED if pct > 50 else COLOR_VALUE)
+                QColor(RED if pct > 50 else NUMBER)
             )
             pct_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tbl_profiler.setItem(row, 3, pct_item)
@@ -476,13 +440,13 @@ class SWOConsole(QWidget):
     @pyqtSlot()
     def _load_elf_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load ELF File", "",
+            self, "加载ELF文件", "",
             "ELF Files (*.elf *.out *.axf);;All Files (*)",
         )
         if path:
             self.load_elf(path)
             count = len(self._elf_symbols)
-            self.lbl_status.setText(f"ELF: {count} symbols loaded")
+            self.lbl_status.setText(f"ELF: 已加载 {count} 个符号")
 
     # ------------------------------------------------------------------
     # Exception name lookup

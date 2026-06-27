@@ -12,6 +12,11 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 
+from widgets.styles import (
+    BG_DARK, BORDER, TEXT, NUMBER,
+    FONT_MONO, FONT_SIZE, toolbar_style, table_style,
+)
+
 
 # -- Channel colors (dark-theme friendly) ------------------------------------
 CHANNEL_COLORS = [
@@ -25,25 +30,20 @@ CHANNEL_COLORS = [
     '#B0BEC5',  # grey
 ]
 
-# -- Style constants ---------------------------------------------------------
-COLOR_CHANGED = '#FF6B6B'
-COLOR_DESC    = '#6A9955'
-COLOR_VALUE   = '#B5CEA8'
-
 TIMEBASE_ITEMS = [
-    ("1 ms/div",    1),
-    ("2 ms/div",    2),
-    ("5 ms/div",    5),
-    ("10 ms/div",  10),
-    ("20 ms/div",  20),
-    ("50 ms/div",  50),
-    ("100 ms/div", 100),
-    ("200 ms/div", 200),
-    ("500 ms/div", 500),
-    ("1 s/div",   1000),
-    ("2 s/div",   2000),
-    ("5 s/div",   5000),
-    ("10 s/div", 10000),
+    ("1 毫秒/格",    1),
+    ("2 毫秒/格",    2),
+    ("5 毫秒/格",    5),
+    ("10 毫秒/格",  10),
+    ("20 毫秒/格",  20),
+    ("50 毫秒/格",  50),
+    ("100 毫秒/格", 100),
+    ("200 毫秒/格", 200),
+    ("500 毫秒/格", 500),
+    ("1 秒/格",   1000),
+    ("2 秒/格",   2000),
+    ("5 秒/格",   5000),
+    ("10 秒/格", 10000),
 ]
 
 TYPE_CONVERSIONS = {
@@ -85,20 +85,21 @@ class Oscilloscope(QWidget):
         layout.setSpacing(4)
 
         # -- Control bar --------------------------------------------------
+        self.setStyleSheet(toolbar_style())
         ctrl = QHBoxLayout()
 
-        self.btn_start = QPushButton("Start")
+        self.btn_start = QPushButton("开始")
         self.btn_start.setFixedWidth(70)
         self.btn_start.clicked.connect(self._toggle_running)
 
-        self.btn_single = QPushButton("Single")
+        self.btn_single = QPushButton("单次")
         self.btn_single.setFixedWidth(70)
         self.btn_single.clicked.connect(self._single_shot)
 
         # Trigger group
-        lbl_trig = QLabel("Trigger:")
+        lbl_trig = QLabel("触发:")
         self.cmb_trig_mode = QComboBox()
-        self.cmb_trig_mode.addItems(["Free", "Rising", "Falling"])
+        self.cmb_trig_mode.addItems(["自由", "上升沿", "下降沿"])
         self.cmb_trig_mode.setFixedWidth(75)
 
         self.cmb_trig_ch = QComboBox()
@@ -110,10 +111,10 @@ class Oscilloscope(QWidget):
         self.spin_trig_level.setRange(-1e9, 1e9)
         self.spin_trig_level.setDecimals(2)
         self.spin_trig_level.setFixedWidth(100)
-        self.spin_trig_level.setPrefix("Lvl: ")
+        self.spin_trig_level.setPrefix("电平: ")
 
         # Timebase
-        lbl_tb = QLabel("Timebase:")
+        lbl_tb = QLabel("时基:")
         self.cmb_timebase = QComboBox()
         for label, _ in TIMEBASE_ITEMS:
             self.cmb_timebase.addItem(label)
@@ -121,7 +122,7 @@ class Oscilloscope(QWidget):
         self.cmb_timebase.setFixedWidth(100)
 
         # Channel count
-        lbl_ch = QLabel("Channels:")
+        lbl_ch = QLabel("通道:")
         self.spin_ch_count = QSpinBox()
         self.spin_ch_count.setRange(1, 8)
         self.spin_ch_count.setValue(1)
@@ -137,13 +138,13 @@ class Oscilloscope(QWidget):
         layout.addLayout(ctrl)
 
         # -- Memory channel config ----------------------------------------
-        ch_group = QGroupBox("Memory Channels (MCU Address Reader)")
+        ch_group = QGroupBox("内存通道 (MCU 地址读取器)")
         ch_layout = QVBoxLayout(ch_group)
         ch_layout.setContentsMargins(4, 4, 4, 4)
 
         self.tbl_channels = QTableWidget(0, 5)
         self.tbl_channels.setHorizontalHeaderLabels(
-            ["Address", "Type", "Scale", "Label", ""]
+            ["地址", "类型", "缩放", "标签", ""]
         )
         self.tbl_channels.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.Stretch
@@ -154,7 +155,7 @@ class Oscilloscope(QWidget):
         self._apply_table_style()
         ch_layout.addWidget(self.tbl_channels)
 
-        btn_add = QPushButton("Add Memory Channel")
+        btn_add = QPushButton("添加通道")
         btn_add.setFixedWidth(180)
         btn_add.clicked.connect(self._add_mem_channel)
         ch_layout.addWidget(btn_add)
@@ -163,14 +164,14 @@ class Oscilloscope(QWidget):
 
         # -- Measurement panel --------------------------------------------
         meas = QHBoxLayout()
-        self.lbl_freq = QLabel("Freq: --")
+        self.lbl_freq = QLabel("频率: --")
         self.lbl_vpp  = QLabel("Vpp: --")
         self.lbl_vmin = QLabel("Vmin: --")
         self.lbl_vmax = QLabel("Vmax: --")
         for lbl in (self.lbl_freq, self.lbl_vpp, self.lbl_vmin, self.lbl_vmax):
             lbl.setStyleSheet(
-                f"color: {COLOR_VALUE}; font-family: Consolas, monospace;"
-                " font-size: 12px; padding: 2px 8px;"
+                f"color: {NUMBER}; font-family: {FONT_MONO};"
+                f" font-size: {FONT_SIZE}; padding: 2px 8px;"
             )
             meas.addWidget(lbl)
         meas.addStretch()
@@ -182,51 +183,33 @@ class Oscilloscope(QWidget):
         layout.addWidget(self.chart_view, stretch=1)
 
     def _apply_table_style(self):
-        self.tbl_channels.setStyleSheet("""
-            QTableWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #252526;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 3px;
-            }
-        """)
+        self.tbl_channels.setStyleSheet(table_style())
 
     # ------------------------------------------------------------------
     # Chart init
     # ------------------------------------------------------------------
     def _init_chart(self):
         self.chart = QChart()
-        self.chart.setBackgroundBrush(QColor("#1E1E1E"))
-        self.chart.setTitleBrush(QColor("#D4D4D4"))
-        self.chart.setTitle("Oscilloscope")
-        self.chart.legend().setLabelColor(QColor("#D4D4D4"))
+        self.chart.setBackgroundBrush(QColor(BG_DARK))
+        self.chart.setTitleBrush(QColor(TEXT))
+        self.chart.setTitle("示波器")
+        self.chart.legend().setLabelColor(QColor(TEXT))
         self.chart.legend().setVisible(True)
         self.chart.setAnimationOptions(QChart.NoAnimation)
 
         # Axes
         self._axis_x = QValueAxis()
-        self._axis_x.setTitleText("Samples")
-        self._axis_x.setTitleBrush(QColor("#D4D4D4"))
-        self._axis_x.setLabelsBrush(QColor("#D4D4D4"))
-        self._axis_x.setGridLineColor(QColor("#3C3C3C"))
+        self._axis_x.setTitleText("采样点")
+        self._axis_x.setTitleBrush(QColor(TEXT))
+        self._axis_x.setLabelsBrush(QColor(TEXT))
+        self._axis_x.setGridLineColor(QColor(BORDER))
         self._axis_x.setRange(0, DIVISIONS * 100)
 
         self._axis_y = QValueAxis()
-        self._axis_y.setTitleText("Value")
-        self._axis_y.setTitleBrush(QColor("#D4D4D4"))
-        self._axis_y.setLabelsBrush(QColor("#D4D4D4"))
-        self._axis_y.setGridLineColor(QColor("#3C3C3C"))
+        self._axis_y.setTitleText("数值")
+        self._axis_y.setTitleBrush(QColor(TEXT))
+        self._axis_y.setLabelsBrush(QColor(TEXT))
+        self._axis_y.setGridLineColor(QColor(BORDER))
         self._axis_y.setRange(-100, 100)
 
         self.chart.addAxis(self._axis_x, Qt.AlignBottom)
@@ -278,13 +261,13 @@ class Oscilloscope(QWidget):
             return
         self._running = True
         self._single_shot_pending = False
-        self.btn_start.setText("Stop")
+        self.btn_start.setText("停止")
         self._timer.start()
 
     def _stop(self):
         self._running = False
         self._single_shot_pending = False
-        self.btn_start.setText("Start")
+        self.btn_start.setText("开始")
         self._timer.stop()
 
     @pyqtSlot()
@@ -295,7 +278,7 @@ class Oscilloscope(QWidget):
         self._single_shot_pending = True
         self._single_shot_samples = DIVISIONS * 100
         self._running = True
-        self.btn_start.setText("Stop")
+        self.btn_start.setText("停止")
         # Clear existing data for a clean capture
         self._clear_series()
         self._x_pos = 0
@@ -468,9 +451,9 @@ class Oscilloscope(QWidget):
             duration = len(vals) * sample_period
             if crossings >= 2 and duration > 0:
                 freq = crossings / (2 * duration)
-                self.lbl_freq.setText(f"Freq: {freq:.1f} Hz")
+                self.lbl_freq.setText(f"频率: {freq:.1f} Hz")
             else:
-                self.lbl_freq.setText("Freq: --")
+                self.lbl_freq.setText("频率: --")
             break  # show measurements for first active channel only
 
     # ------------------------------------------------------------------

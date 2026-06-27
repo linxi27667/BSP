@@ -9,12 +9,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QColor, QFont
 
-
-# -- Color constants (dark-theme, matching register_viewer.py) ----------------
-COLOR_REG_NAME = '#DCDCAA'   # yellow - register names
-COLOR_VALUE    = '#B5CEA8'   # green  - hex values
-COLOR_DESC     = '#6A9955'   # dim green - descriptions
-COLOR_CHANGED  = '#FF6B6B'   # red    - value changed since last read
+from widgets.styles import (
+    YELLOW, NUMBER, COMMENT, RED, FONT_MONO, FONT_SIZE,
+    table_style, toolbar_style, text_edit_style,
+)
 
 
 # -- Register lists per architecture ------------------------------------------
@@ -128,16 +126,16 @@ class CoreRegisterViewer(QWidget):
         self.combo_mode.setFixedWidth(160)
         self.combo_mode.currentIndexChanged.connect(self._on_mode_changed)
 
-        self.chk_auto = QCheckBox("Auto Refresh")
+        self.chk_auto = QCheckBox("自动刷新")
         self.chk_auto.setChecked(False)
         self.chk_auto.stateChanged.connect(self._on_auto_toggle)
 
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.setFixedWidth(80)
         self.btn_refresh.clicked.connect(self._refresh)
         self.btn_refresh.setEnabled(False)
 
-        toolbar.addWidget(QLabel("Architecture:"))
+        toolbar.addWidget(QLabel("架构:"))
         toolbar.addWidget(self.combo_mode)
         toolbar.addStretch()
         toolbar.addWidget(self.chk_auto)
@@ -146,58 +144,32 @@ class CoreRegisterViewer(QWidget):
 
         # -- Register table ---------------------------------------------
         self.tbl_regs = QTableWidget(0, 3)
-        self.tbl_regs.setHorizontalHeaderLabels(["Register", "Value", "Description"])
+        self.tbl_regs.setHorizontalHeaderLabels(["寄存器", "值", "描述"])
         self.tbl_regs.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.tbl_regs.verticalHeader().setVisible(False)
         self.tbl_regs.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_regs.setSelectionBehavior(QTableWidget.SelectRows)
-        self._apply_table_style()
+        self.tbl_regs.setStyleSheet(table_style())
         layout.addWidget(self.tbl_regs)
 
         # -- Status decode panel ----------------------------------------
-        decode_group = QGroupBox("Status Decode")
+        decode_group = QGroupBox("状态解码")
         decode_layout = QVBoxLayout(decode_group)
         decode_layout.setContentsMargins(4, 4, 4, 4)
 
         self.txt_decode = QTextEdit()
         self.txt_decode.setReadOnly(True)
-        self.txt_decode.setFont(QFont("Consolas", 11))
+        self.txt_decode.setFont(QFont(FONT_MONO, 11))
         self.txt_decode.setMaximumHeight(180)
-        self.txt_decode.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.txt_decode.setStyleSheet(text_edit_style())
         decode_layout.addWidget(self.txt_decode)
         layout.addWidget(decode_group)
 
+        # -- Apply shared toolbar style -----------------------------------
+        self.setStyleSheet(toolbar_style())
+
         # Build initial register list (ARM)
         self._build_register_list()
-
-    def _apply_table_style(self):
-        self.tbl_regs.setStyleSheet("""
-            QTableWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 13px;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #252526;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 4px;
-            }
-        """)
 
     def _init_timer(self):
         self._timer = QTimer(self)
@@ -235,19 +207,19 @@ class CoreRegisterViewer(QWidget):
         self.tbl_regs.setRowCount(len(regs))
         for row, (name, desc) in enumerate(regs):
             name_item = QTableWidgetItem(name)
-            name_item.setForeground(QColor(COLOR_REG_NAME))
+            name_item.setForeground(QColor(YELLOW))
             font = name_item.font()
             font.setBold(True)
             name_item.setFont(font)
             self.tbl_regs.setItem(row, 0, name_item)
 
             val_item = QTableWidgetItem("---")
-            val_item.setForeground(QColor(COLOR_VALUE))
+            val_item.setForeground(QColor(NUMBER))
             val_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tbl_regs.setItem(row, 1, val_item)
 
             desc_item = QTableWidgetItem(desc)
-            desc_item.setForeground(QColor(COLOR_DESC))
+            desc_item.setForeground(QColor(COMMENT))
             self.tbl_regs.setItem(row, 2, desc_item)
 
         self.tbl_regs.resizeColumnsToContents()
@@ -271,7 +243,7 @@ class CoreRegisterViewer(QWidget):
                 item = self.tbl_regs.item(row, 1)
                 if item:
                     item.setText("ERR")
-                    item.setForeground(QColor(COLOR_CHANGED))
+                    item.setForeground(QColor(RED))
                 continue
 
             item = self.tbl_regs.item(row, 1)
@@ -283,9 +255,9 @@ class CoreRegisterViewer(QWidget):
 
             prev = self._prev_values.get(name)
             if prev is not None and prev != value:
-                item.setForeground(QColor(COLOR_CHANGED))
+                item.setForeground(QColor(RED))
             else:
-                item.setForeground(QColor(COLOR_VALUE))
+                item.setForeground(QColor(NUMBER))
 
             self._prev_values[name] = value
 

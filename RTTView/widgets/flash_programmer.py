@@ -12,12 +12,10 @@ from PyQt5.QtGui import QFont
 import struct
 import os
 
-# -- Color constants (dark theme) ---------------------------------------------
-_COLOR_HEADER = '#569CD6'
-_COLOR_VALUE  = '#B5CEA8'
-_COLOR_ERROR  = '#FF6B6B'
-_COLOR_OK     = '#4EC9B0'
-_COLOR_DIM    = '#808080'
+from widgets.styles import (
+    RED, TEAL, FONT_MONO, FONT_SIZE,
+    toolbar_style, text_edit_style, progress_bar_style,
+)
 
 
 class FlashProgrammer(QWidget):
@@ -35,23 +33,19 @@ class FlashProgrammer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
+        self.setStyleSheet(toolbar_style())
 
         # -- File selection ---------------------------------------------
         file_group = QGroupBox("Firmware File")
         file_layout = QHBoxLayout(file_group)
         file_layout.setContentsMargins(4, 4, 4, 4)
 
-        file_layout.addWidget(QLabel("File:"))
+        file_layout.addWidget(QLabel("文件:"))
         self.txt_file = QLineEdit()
-        self.txt_file.setPlaceholderText("Select firmware file...")
-        self.txt_file.setFont(QFont("Consolas", 11))
-        self.txt_file.setStyleSheet(
-            "background-color: #1E1E1E; color: #D4D4D4; "
-            "border: 1px solid #3C3C3C; padding: 2px;"
-        )
+        self.txt_file.setPlaceholderText("选择固件文件...")
         file_layout.addWidget(self.txt_file)
 
-        self.btn_browse = QPushButton("Browse")
+        self.btn_browse = QPushButton("浏览...")
         self.btn_browse.setFixedWidth(80)
         self.btn_browse.clicked.connect(self._on_browse)
         file_layout.addWidget(self.btn_browse)
@@ -61,17 +55,12 @@ class FlashProgrammer(QWidget):
         # -- Address and format -----------------------------------------
         addr_row = QHBoxLayout()
 
-        addr_row.addWidget(QLabel("Base Address:"))
+        addr_row.addWidget(QLabel("地址:"))
         self.txt_addr = QLineEdit("0x08000000")
         self.txt_addr.setFixedWidth(120)
-        self.txt_addr.setFont(QFont("Consolas", 11))
-        self.txt_addr.setStyleSheet(
-            "background-color: #1E1E1E; color: #D4D4D4; "
-            "border: 1px solid #3C3C3C; padding: 2px;"
-        )
         addr_row.addWidget(self.txt_addr)
 
-        addr_row.addWidget(QLabel("Format:"))
+        addr_row.addWidget(QLabel("格式:"))
         self.combo_format = QComboBox()
         self.combo_format.addItems(["Auto", "BIN", "HEX", "ELF"])
         self.combo_format.setFixedWidth(80)
@@ -83,25 +72,25 @@ class FlashProgrammer(QWidget):
         # -- Operation buttons ------------------------------------------
         btn_row = QHBoxLayout()
 
-        self.btn_erase = QPushButton("Reset MCU")
+        self.btn_erase = QPushButton("复位MCU")
         self.btn_erase.setFixedWidth(100)
         self.btn_erase.clicked.connect(self._on_erase)
         self.btn_erase.setEnabled(False)
         btn_row.addWidget(self.btn_erase)
 
-        self.btn_flash = QPushButton("Flash")
+        self.btn_flash = QPushButton("烧录")
         self.btn_flash.setFixedWidth(100)
         self.btn_flash.clicked.connect(self._on_flash)
         self.btn_flash.setEnabled(False)
         btn_row.addWidget(self.btn_flash)
 
-        self.btn_verify = QPushButton("Verify")
+        self.btn_verify = QPushButton("校验")
         self.btn_verify.setFixedWidth(100)
         self.btn_verify.clicked.connect(self._on_verify)
         self.btn_verify.setEnabled(False)
         btn_row.addWidget(self.btn_verify)
 
-        self.chk_reset = QCheckBox("Reset after flash")
+        self.chk_reset = QCheckBox("烧录后复位")
         self.chk_reset.setChecked(True)
         btn_row.addWidget(self.chk_reset)
 
@@ -114,17 +103,7 @@ class FlashProgrammer(QWidget):
         self.progress.setMaximum(100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                background-color: #1E1E1E;
-                border: 1px solid #3C3C3C;
-                text-align: center;
-                color: #D4D4D4;
-            }
-            QProgressBar::chunk {
-                background-color: #0E7A0D;
-            }
-        """)
+        self.progress.setStyleSheet(progress_bar_style())
         layout.addWidget(self.progress)
 
         # -- Log --------------------------------------------------------
@@ -134,16 +113,8 @@ class FlashProgrammer(QWidget):
 
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
-        self.txt_log.setFont(QFont("Consolas", 11))
-        self.txt_log.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.txt_log.setFont(QFont(FONT_MONO, int(FONT_SIZE.replace("px", ""))))
+        self.txt_log.setStyleSheet(text_edit_style())
         log_layout.addWidget(self.txt_log)
         layout.addWidget(log_group)
 
@@ -182,7 +153,7 @@ class FlashProgrammer(QWidget):
     def _on_erase(self):
         """Reset MCU via AIRCR SYSRESETREQ (Cortex-M standard)."""
         if not self._probe:
-            self._log("No probe connected.", error=True)
+            self._log("未连接探针。", error=True)
             return
         self._log("Resetting MCU via SYSRESETREQ...")
         try:
@@ -197,7 +168,7 @@ class FlashProgrammer(QWidget):
     def _on_flash(self):
         """Flash firmware to MCU."""
         if not self._probe:
-            self._log("No probe connected.", error=True)
+            self._log("未连接探针。", error=True)
             return
         self._flash()
 
@@ -205,7 +176,7 @@ class FlashProgrammer(QWidget):
     def _on_verify(self):
         """Verify firmware on MCU."""
         if not self._probe:
-            self._log("No probe connected.", error=True)
+            self._log("未连接探针。", error=True)
             return
         self._verify()
 
@@ -474,11 +445,11 @@ class FlashProgrammer(QWidget):
         """Append a message to the log."""
         if error:
             self.txt_log.append(
-                f'<span style="color:{_COLOR_ERROR};">{msg}</span>'
+                f'<span style="color:{RED};">{msg}</span>'
             )
         elif ok:
             self.txt_log.append(
-                f'<span style="color:{_COLOR_OK};">{msg}</span>'
+                f'<span style="color:{TEAL};">{msg}</span>'
             )
         else:
             self.txt_log.append(msg)

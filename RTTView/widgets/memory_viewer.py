@@ -6,27 +6,22 @@ from PyQt5.QtWidgets import (
     QTextEdit, QCheckBox, QLabel, QGroupBox,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QFont
-
-
-# -- Color constants (dark-theme friendly) ------------------------------------
-COLOR_FLASH  = '#4EC9B0'   # teal  - Flash region  (0x08000000)
-COLOR_SRAM   = '#B5CEA8'   # green - SRAM region   (0x20000000)
-COLOR_PERIPH = '#CE9178'   # orange - Peripheral   (0x40000000)
-COLOR_HEADER = '#569CD6'   # blue  - column header / address
-COLOR_ASCII  = '#D4D4D4'   # grey  - ASCII column
-COLOR_LABEL  = '#808080'   # dim grey - labels
+from widgets.styles import (
+    TEAL, NUMBER, STRING, CYAN, TEXT, TEXT_DIM,
+    FONT_MONO, FONT_SIZE,
+    toolbar_style, text_edit_style,
+)
 
 
 def _region_color(addr: int) -> str:
     """Return hex color string based on memory region."""
     if 0x08000000 <= addr < 0x10000000:
-        return COLOR_FLASH
+        return TEAL
     if 0x20000000 <= addr < 0x30000000:
-        return COLOR_SRAM
+        return NUMBER
     if 0x40000000 <= addr < 0x60000000:
-        return COLOR_PERIPH
-    return COLOR_ASCII  # fallback: neutral grey
+        return STRING
+    return TEXT  # fallback: neutral grey
 
 
 class MemoryViewer(QWidget):
@@ -44,6 +39,7 @@ class MemoryViewer(QWidget):
     # UI setup
     # ------------------------------------------------------------------
     def _init_ui(self):
+        self.setStyleSheet(toolbar_style())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -51,32 +47,22 @@ class MemoryViewer(QWidget):
         # -- Address / length row -----------------------------------------
         addr_row = QHBoxLayout()
 
-        addr_row.addWidget(QLabel("Address:"))
+        addr_row.addWidget(QLabel("地址:"))
         self.txt_addr = QLineEdit("0x20000000")
         self.txt_addr.setFixedWidth(120)
-        self.txt_addr.setFont(QFont("Consolas", 11))
-        self.txt_addr.setStyleSheet(
-            "background-color: #1E1E1E; color: #D4D4D4; "
-            "border: 1px solid #3C3C3C; padding: 2px;"
-        )
         addr_row.addWidget(self.txt_addr)
 
-        addr_row.addWidget(QLabel("Length:"))
+        addr_row.addWidget(QLabel("长度:"))
         self.txt_len = QLineEdit("256")
         self.txt_len.setFixedWidth(80)
-        self.txt_len.setFont(QFont("Consolas", 11))
-        self.txt_len.setStyleSheet(
-            "background-color: #1E1E1E; color: #D4D4D4; "
-            "border: 1px solid #3C3C3C; padding: 2px;"
-        )
         addr_row.addWidget(self.txt_len)
 
-        self.btn_go = QPushButton("Go")
+        self.btn_go = QPushButton("跳转")
         self.btn_go.setFixedWidth(60)
         self.btn_go.clicked.connect(self._on_goto)
         addr_row.addWidget(self.btn_go)
 
-        self.chk_auto = QCheckBox("Auto 500ms")
+        self.chk_auto = QCheckBox("自动 500ms")
         self.chk_auto.setChecked(False)
         self.chk_auto.stateChanged.connect(self._on_auto_toggle)
         addr_row.addWidget(self.chk_auto)
@@ -85,19 +71,19 @@ class MemoryViewer(QWidget):
         layout.addLayout(addr_row)
 
         # -- Quick jump buttons -------------------------------------------
-        jump_group = QGroupBox("Quick Jump")
+        jump_group = QGroupBox("快速跳转")
         jump_layout = QHBoxLayout(jump_group)
         jump_layout.setContentsMargins(4, 4, 4, 4)
 
         jumps = [
-            ("Flash",  "0x08000000"),
-            ("SRAM",   "0x20000000"),
-            ("Periph", "0x40000000"),
-            ("Stack",  "0x20010000"),
+            ("Flash (0x08000000)",  "0x08000000"),
+            ("SRAM (0x20000000)",   "0x20000000"),
+            ("外设 (0x40000000)",   "0x40000000"),
+            ("Stack",               "0x20010000"),
         ]
         for label, addr in jumps:
             btn = QPushButton(label)
-            btn.setFixedWidth(80)
+            btn.setFixedWidth(140)
             btn.clicked.connect(lambda checked, a=addr: self._jump_to(a))
             jump_layout.addWidget(btn)
 
@@ -107,11 +93,7 @@ class MemoryViewer(QWidget):
         # -- Hex display --------------------------------------------------
         self.txt_hex = QTextEdit()
         self.txt_hex.setReadOnly(True)
-        self.txt_hex.setFont(QFont("Consolas", 11))
-        self.txt_hex.setStyleSheet(
-            "background-color: #1E1E1E; color: #D4D4D4; "
-            "border: 1px solid #3C3C3C;"
-        )
+        self.txt_hex.setStyleSheet(text_edit_style())
         layout.addWidget(self.txt_hex)
 
     def _init_timer(self):
@@ -213,11 +195,11 @@ class MemoryViewer(QWidget):
         lines: list[str] = []
 
         # -- Header row ---------------------------------------------------
-        header_cells = ['<span style="color:{0};">{0}</span>'.format(COLOR_HEADER)]
+        header_cells = ['<span style="color:{0};">{0}</span>'.format(CYAN)]
         header_cells.append('     ')
         for col in range(16):
             header_cells.append(
-                f'<span style="color:{COLOR_HEADER};">{col:02X}</span>'
+                f'<span style="color:{CYAN};">{col:02X}</span>'
             )
             if col == 7:
                 header_cells.append('  ')
@@ -240,7 +222,7 @@ class MemoryViewer(QWidget):
 
             # Address
             parts.append(
-                f'<span style="color:{COLOR_HEADER};">'
+                f'<span style="color:{CYAN};">'
                 f'{row_addr:08X}</span>  '
             )
 
@@ -268,12 +250,12 @@ class MemoryViewer(QWidget):
             # ASCII
             ascii_str = ''.join(ascii_chars)
             parts.append(
-                f' <span style="color:{COLOR_ASCII};">{ascii_str}</span>'
+                f' <span style="color:{TEXT};">{ascii_str}</span>'
             )
 
             lines.append(''.join(parts))
 
-        html = '<pre style="font-family:Consolas,monospace;font-size:13px;">'
+        html = f'<pre style="font-family:{FONT_MONO},monospace;font-size:{FONT_SIZE};">'
         html += '\n'.join(lines)
         html += '</pre>'
         self.txt_hex.setHtml(html)

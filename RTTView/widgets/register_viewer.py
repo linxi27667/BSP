@@ -10,16 +10,19 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QColor, QFont
 
 from core.svd_parser import parse_svd, Device, Peripheral, Register, Field
+from widgets.styles import (
+    TEXT, TEXT_DIM, SELECTION, RED, YELLOW, CYAN, NUMBER, COMMENT,
+    FONT_MONO, FONT_SIZE, FONT_SIZE_LARGE,
+    table_style, toolbar_style,
+)
 
-
-# -- Color constants (dark-theme friendly) ------------------------------------
-COLOR_CHANGED  = '#FF6B6B'   # red   - value changed since last read
-COLOR_PERIPH   = '#DCDCAA'   # yellow - peripheral names
-COLOR_REG      = '#D4D4D4'   # light grey - register names
-COLOR_FIELD    = '#9CDCFE'   # blue  - field names
-COLOR_ADDR     = '#808080'   # grey  - address column
-COLOR_VALUE    = '#B5CEA8'   # green - value column
-COLOR_DESC     = '#6A9955'   # dim green - description column
+# -- Semantic color aliases ---------------------------------------------------
+COLOR_CHANGED = RED
+COLOR_PERIPH  = YELLOW
+COLOR_REG     = TEXT
+COLOR_FIELD   = CYAN
+COLOR_VALUE   = NUMBER
+COLOR_DESC    = COMMENT
 
 
 class RegisterViewer(QWidget):
@@ -43,19 +46,22 @@ class RegisterViewer(QWidget):
         layout.setSpacing(4)
 
         # -- Toolbar row -------------------------------------------------
-        toolbar = QHBoxLayout()
-        self.btn_load = QPushButton("Load SVD...")
+        toolbar_widget = QWidget()
+        toolbar_widget.setStyleSheet(toolbar_style())
+        toolbar = QHBoxLayout(toolbar_widget)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        self.btn_load = QPushButton("加载SVD...")
         self.btn_load.setFixedWidth(110)
         self.btn_load.clicked.connect(self._on_load_svd)
 
-        self.lbl_device = QLabel("No SVD loaded")
+        self.lbl_device = QLabel("未加载SVD文件")
         self.lbl_device.setStyleSheet(f"color: {COLOR_DESC}; padding-left: 8px;")
 
-        self.chk_auto = QCheckBox("Auto Refresh")
+        self.chk_auto = QCheckBox("自动刷新")
         self.chk_auto.setChecked(False)
         self.chk_auto.stateChanged.connect(self._on_auto_toggle)
 
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.setFixedWidth(80)
         self.btn_refresh.clicked.connect(self._refresh_all)
         self.btn_refresh.setEnabled(False)
@@ -65,7 +71,7 @@ class RegisterViewer(QWidget):
         toolbar.addStretch()
         toolbar.addWidget(self.chk_auto)
         toolbar.addWidget(self.btn_refresh)
-        layout.addLayout(toolbar)
+        layout.addWidget(toolbar_widget)
 
         # -- Splitter: tree (top) + detail (bottom) ----------------------
         splitter = QSplitter(Qt.Vertical)
@@ -86,7 +92,7 @@ class RegisterViewer(QWidget):
         detail_layout = QVBoxLayout(detail_group)
         detail_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.lbl_detail_desc = QLabel("Select a register to view details.")
+        self.lbl_detail_desc = QLabel("选择一个寄存器查看详情。")
         self.lbl_detail_desc.setWordWrap(True)
         self.lbl_detail_desc.setStyleSheet(f"color: {COLOR_DESC};")
         detail_layout.addWidget(self.lbl_detail_desc)
@@ -109,48 +115,14 @@ class RegisterViewer(QWidget):
         layout.addWidget(splitter)
 
     def _apply_tree_style(self):
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 13px;
-            }
-            QTreeWidget::item {
-                padding: 2px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #252526;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 4px;
-            }
+        self.tree.setStyleSheet(table_style() + f"""
+            QTreeWidget {{
+                font-size: {FONT_SIZE_LARGE};
+            }}
         """)
 
     def _apply_table_style(self):
-        self.tbl_fields.setStyleSheet("""
-            QTableWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #252526;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 3px;
-            }
-        """)
+        self.tbl_fields.setStyleSheet(table_style())
 
     def _init_timer(self):
         self._timer = QTimer(self)
@@ -359,6 +331,6 @@ class RegisterViewer(QWidget):
                 for col in range(5):
                     item = self.tbl_fields.item(row, col)
                     if item:
-                        item.setBackground(QColor("#264F78"))
+                        item.setBackground(QColor(SELECTION))
 
         self.tbl_fields.resizeColumnsToContents()

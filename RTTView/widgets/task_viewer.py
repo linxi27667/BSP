@@ -8,26 +8,28 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QColor, QFont
 
 from core.rtos_analyzer import FreeRTOSAnalyzer, TaskInfo
+from widgets.styles import (
+    STACK_GREEN, STACK_ORANGE, STACK_RED,
+    FONT_MONO, FONT_SIZE,
+    table_style, toolbar_style, progress_bar_style,
+)
 
-
-# -- Color constants (dark-theme friendly) ------------------------------------
-COLOR_RUNNING   = '#4CAF50'   # green
-COLOR_READY     = '#2196F3'   # blue
-COLOR_BLOCKED   = '#FF9800'   # orange
-COLOR_SUSPENDED = '#9E9E9E'   # grey
-COLOR_DELETED   = '#F44336'   # red
-
+# -- State color / name maps --------------------------------------------------
 STATE_COLORS = {
-    0: COLOR_RUNNING,
-    1: COLOR_READY,
-    2: COLOR_BLOCKED,
-    3: COLOR_SUSPENDED,
-    4: COLOR_DELETED,
+    0: '#4CAF50',   # Running   - green
+    1: '#2196F3',   # Ready     - blue
+    2: '#FF9800',   # Blocked   - orange
+    3: '#9E9E9E',   # Suspended - grey
+    4: '#F44336',   # Deleted   - red
 }
 
-STACK_RED    = '#F44336'   # >80%
-STACK_ORANGE = '#FF9800'   # >60%
-STACK_GREEN  = '#4CAF50'   # <=60%
+STATE_NAMES_CN = {
+    0: "运行中",
+    1: "就绪",
+    2: "阻塞",
+    3: "挂起",
+    4: "已删除",
+}
 
 
 class TaskViewer(QWidget):
@@ -45,6 +47,8 @@ class TaskViewer(QWidget):
     # UI setup
     # ------------------------------------------------------------------
     def _init_ui(self):
+        self.setStyleSheet(toolbar_style())
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -52,15 +56,15 @@ class TaskViewer(QWidget):
         # -- Toolbar row -------------------------------------------------
         toolbar = QHBoxLayout()
 
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.setFixedWidth(80)
         self.btn_refresh.clicked.connect(self._on_refresh)
 
-        self.chk_auto = QCheckBox("Auto Refresh")
+        self.chk_auto = QCheckBox("自动刷新")
         self.chk_auto.setChecked(False)
         self.chk_auto.stateChanged.connect(self._on_auto_toggle)
 
-        self.lbl_info = QLabel("No probe connected")
+        self.lbl_info = QLabel("未连接探针")
         self.lbl_info.setStyleSheet("color: #808080; padding-left: 8px;")
 
         toolbar.addWidget(self.btn_refresh)
@@ -73,7 +77,7 @@ class TaskViewer(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
-            "Task Name", "State", "Priority", "Stack Usage", "Stack Size", "TCB Address"
+            "任务名称", "状态", "优先级", "栈使用", "栈大小", "TCB地址"
         ])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -86,29 +90,9 @@ class TaskViewer(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self._apply_table_style()
+        self.table.setStyleSheet(table_style())
 
         layout.addWidget(self.table)
-
-    def _apply_table_style(self):
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #1E1E1E;
-                alternate-background-color: #252526;
-                color: #D4D4D4;
-                gridline-color: #3C3C3C;
-                border: 1px solid #3C3C3C;
-            }
-            QTableWidget::item:selected {
-                background-color: #264F78;
-            }
-            QHeaderView::section {
-                background-color: #2D2D2D;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                padding: 4px;
-            }
-        """)
 
     def _init_timer(self):
         self._timer = QTimer(self)
@@ -122,7 +106,7 @@ class TaskViewer(QWidget):
         """Receive the DebugProbe instance after MCU connection."""
         self._probe = probe
         self._analyzer = FreeRTOSAnalyzer(probe, mode) if probe else None
-        self.lbl_info.setText("Probe connected" if probe else "No probe connected")
+        self.lbl_info.setText("已连接探针" if probe else "未连接探针")
 
     # ------------------------------------------------------------------
     # Slots
@@ -131,17 +115,17 @@ class TaskViewer(QWidget):
     def _on_refresh(self):
         """Read tasks from MCU and update table."""
         if not self._analyzer:
-            self.lbl_info.setText("No probe connected")
+            self.lbl_info.setText("未连接探针")
             return
 
         try:
             tasks = self._analyzer.read_tasks()
         except Exception as e:
-            self.lbl_info.setText(f"Error: {e}")
+            self.lbl_info.setText(f"错误: {e}")
             return
 
         self._populate_table(tasks)
-        self.lbl_info.setText(f"{len(tasks)} task(s) found")
+        self.lbl_info.setText(f"发现 {len(tasks)} 个任务")
 
     @pyqtSlot(int)
     def _on_auto_toggle(self, state):
@@ -159,11 +143,12 @@ class TaskViewer(QWidget):
         for row, task in enumerate(tasks):
             # Task Name
             name_item = QTableWidgetItem(task.name)
-            name_item.setFont(QFont("Consolas", 10))
+            name_item.setFont(QFont(FONT_MONO, 10))
             self.table.setItem(row, 0, name_item)
 
             # State (color-coded)
-            state_item = QTableWidgetItem(task.state_name)
+            state_cn = STATE_NAMES_CN.get(task.state, task.state_name)
+            state_item = QTableWidgetItem(state_cn)
             state_item.setForeground(QColor(STATE_COLORS.get(task.state, '#D4D4D4')))
             state_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 1, state_item)
@@ -189,7 +174,7 @@ class TaskViewer(QWidget):
 
             # TCB Address
             addr_item = QTableWidgetItem(f"0x{task.tcb_addr:08X}")
-            addr_item.setFont(QFont("Consolas", 10))
+            addr_item.setFont(QFont(FONT_MONO, 10))
             self.table.setItem(row, 5, addr_item)
 
     def _progress_style(self, percent: int) -> str:
@@ -200,16 +185,8 @@ class TaskViewer(QWidget):
         else:
             color = STACK_GREEN
 
-        return f"""
-            QProgressBar {{
-                border: 1px solid #3C3C3C;
-                border-radius: 3px;
-                background-color: #1E1E1E;
-                text-align: center;
-                color: #D4D4D4;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 2px;
-            }}
-        """
+        base = progress_bar_style()
+        return base.replace(
+            "background-color: #4CAF50;",
+            f"background-color: {color};"
+        )

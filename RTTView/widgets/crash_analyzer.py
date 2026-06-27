@@ -11,6 +11,11 @@ from PyQt5.QtGui import QFont
 import bisect
 import struct
 
+from widgets.styles import (
+    RED, FONT_MONO, FONT_SIZE,
+    toolbar_style, text_edit_style,
+)
+
 # -- Cortex-M fault register addresses ----------------------------------------
 _CFSR  = 0xE000ED28
 _HFSR  = 0xE000ED2C
@@ -23,15 +28,6 @@ _DHCSR = 0xE000EDF0
 # Flash region for call-stack scanning (STM32 default)
 _FLASH_BASE = 0x08000000
 _FLASH_END  = 0x08200000
-
-# -- Color constants (dark theme) ---------------------------------------------
-_COLOR_HEADER = '#569CD6'
-_COLOR_REG    = '#DCDCAA'
-_COLOR_VALUE  = '#B5CEA8'
-_COLOR_ERROR  = '#FF6B6B'
-_COLOR_DESC   = '#6A9955'
-_COLOR_WARN   = '#CE9178'
-_COLOR_DIM    = '#808080'
 
 
 class CrashAnalyzer(QWidget):
@@ -53,9 +49,11 @@ class CrashAnalyzer(QWidget):
         layout.setSpacing(4)
 
         # -- Toolbar ----------------------------------------------------
-        toolbar = QHBoxLayout()
+        toolbar_widget = QWidget()
+        toolbar_widget.setStyleSheet(toolbar_style())
+        toolbar = QHBoxLayout(toolbar_widget)
 
-        self.btn_capture = QPushButton("Capture Crash Info")
+        self.btn_capture = QPushButton("捕获崩溃信息")
         self.btn_capture.setFixedWidth(160)
         self.btn_capture.clicked.connect(self._on_capture)
         self.btn_capture.setEnabled(False)
@@ -67,30 +65,22 @@ class CrashAnalyzer(QWidget):
 
         toolbar.addStretch()
 
-        self.btn_load_elf = QPushButton("Load ELF")
+        self.btn_load_elf = QPushButton("加载ELF...")
         self.btn_load_elf.setFixedWidth(100)
         self.btn_load_elf.clicked.connect(self._on_load_elf)
         toolbar.addWidget(self.btn_load_elf)
 
-        layout.addLayout(toolbar)
+        layout.addWidget(toolbar_widget)
 
         # -- Report display ---------------------------------------------
-        report_group = QGroupBox("Crash Report")
+        report_group = QGroupBox("崩溃报告")
         report_layout = QVBoxLayout(report_group)
         report_layout.setContentsMargins(4, 4, 4, 4)
 
         self.txt_report = QTextEdit()
         self.txt_report.setReadOnly(True)
-        self.txt_report.setFont(QFont("Consolas", 11))
-        self.txt_report.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3C3C3C;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-            }
-        """)
+        self.txt_report.setFont(QFont(FONT_MONO, int(FONT_SIZE.replace("px", ""))))
+        self.txt_report.setStyleSheet(text_edit_style())
         report_layout.addWidget(self.txt_report)
         layout.addWidget(report_group)
 
@@ -120,7 +110,7 @@ class CrashAnalyzer(QWidget):
     def _on_capture(self):
         """Capture crash info from the MCU."""
         if not self._probe:
-            self._log_error("No probe connected.")
+            self._log_error("未连接探针.")
             return
         self._capture_crash()
 
@@ -443,7 +433,7 @@ class CrashAnalyzer(QWidget):
 
     def _log_error(self, msg: str):
         self.txt_report.append(
-            f'<span style="color:{_COLOR_ERROR};">[ERROR] {msg}</span>'
+            f'<span style="color:{RED};">[ERROR] {msg}</span>'
         )
 
 

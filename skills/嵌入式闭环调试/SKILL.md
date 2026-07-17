@@ -31,7 +31,9 @@ description: 嵌入式固件命令行闭环调试技能。用于用户要求 AI 
 - `espidf-cycle.ps1`：ESP-IDF 构建/烧录/串口采集一轮闭环。
 - `serial-capture.py`：稳定采集串口日志到文件。
 - `keil-cycle.ps1`：Keil5 构建/下载一轮闭环。
+- `jlink-flash.ps1`：使用固定芯片、接口、速率和探针序列号烧录并校验固件。
 - `jlink-rtt-capture.ps1`：使用 `JLinkRTTLogger.exe` 限时采集 RTT 日志到文件。
+- `jlink-closed-loop.ps1`：通用 Keil/J-Link 闭环入口，参数化工程、固件、芯片、探针、RTT、测试钩子和日志验收规则；不得在此脚本中硬编码具体项目业务。
 - `sync-install.ps1`：把本技能同步安装到 Codex 和 Claude skills 目录。
 
 ## 闭环纪律
@@ -50,6 +52,18 @@ description: 嵌入式固件命令行闭环调试技能。用于用户要求 AI 
 5. 发现端口、下载器、板卡复位方式不确定时，先探测；仍不确定就问用户。
 6. 不使用破坏性操作：不要 `git reset --hard`、不要擦全片、不要覆盖用户配置，除非用户明确要求。
 7. 闭环必须持续：编译失败就修编译；烧录失败就修端口/下载器；运行失败就抓日志；日志指向新根因就继续迭代。
+8. 优先把已验证的命令固化为项目内脚本，参数化工程、固件、芯片、接口、速率、探针序列号和证据目录，避免下一轮重新拼命令。
+
+## 运动机构真实性分级
+
+电机、舵机等运动机构的“通过”必须说明负载边界，防止架空结果冒充整车结果：
+
+1. 软件回归：算法、协议、超时和故障停车测试通过。
+2. 架空台架：至少覆盖正反方向、多档阶跃、左右一致性、稳态误差、停止残留和多轮重复性；原始 RTT 与机器可读汇总都要落盘。
+3. 低速落地：台架通过仅允许在可控场地做低速直线测试，验证静摩擦、载荷、电池压降和机械偏载。
+4. 任务场景：完成转弯、循迹或实际负载重复测试后，才能声称场景可用。
+
+对重复台架测试，至少报告完整通过轮数、每档误差、左右归一化差异、最差变异系数和停车残留。任何缺相、超时或故障都按整轮失败处理，不能只挑成功日志。
 
 ## 标准流程
 
@@ -67,6 +81,7 @@ description: 嵌入式固件命令行闭环调试技能。用于用户要求 AI 
 3. 构建：
    - ESP-IDF：先 `idf.py build`。
    - Keil：先 `UV4.exe -b xxx.uvprojx -j0 -o build.log`。
+   - 部分 µVision 版本不会提供可靠的进程退出码；以构建日志中的错误/警告汇总和产物时间戳共同判定，不能只看 `$LASTEXITCODE`。
    构建失败时，先修最靠前、最根本的错误。
 
 4. 烧录：
@@ -111,6 +126,19 @@ powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\espidf-cycle.ps1
 
 ## Keil/J-Link 快捷命令
 
+通用构建—烧录—RTT—测试—日志验收闭环：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\jlink-closed-loop.ps1 `
+  -Action Cycle -ProjectPath <项目路径> -Uvprojx <工程.uvprojx> `
+  -Firmware <固件.hex> -Device <芯片> -Interface SWD -Speed 4000 `
+  -UsbSerial <J-Link序列号> -ConfirmOutputSafe -CaptureSeconds 30 `
+  -TestCommand <可选测试入口> -TestArguments @(<参数>) `
+  -RequiredLogPattern <成功正则> -ForbiddenLogPattern <故障正则>
+```
+
+通用入口只负责工具链和证据闭环。电机测试、网络指令、产测协议等项目业务通过 `TestCommand` 注入，不得复制进通用脚本。
+
 Keil 构建：
 
 ```powershell
@@ -133,6 +161,14 @@ RTT 命令行采集（采集期间保持当前 PowerShell 会话，不启动桌�
 powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\jlink-rtt-capture.ps1 `
   -Device <芯片型号> -Interface SWD -Speed 4000 -Channel 0 -DurationSeconds 90 `
   -OutputPath <项目目录>\logs\rtt.log
+```
+
+J-Link CLI 烧录并校验（运动输出必须已处于安全状态）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\jlink-flash.ps1 `
+  -Firmware <固件.hex> -Device MSPM0G3507 -Interface SWD -Speed 1000 `
+  -UsbSerial 69514110 -ConfirmOutputSafe -LogPath <项目目录>\logs\flash.log
 ```
 
 ## 自主调试增强

@@ -44,7 +44,11 @@ if (-not $FlashLog) { $FlashLog = Join-Path $outDir "keil_flash.log" }
 & $KeilExe -b $Uvprojx -j0 -o $BuildLog
 $buildCode = $LASTEXITCODE
 Get-Content -Path $BuildLog -Tail 80 -ErrorAction SilentlyContinue
-if ($buildCode -ne 0) { throw "Keil build failed: $BuildLog" }
+$buildText = Get-Content -Raw -LiteralPath $BuildLog
+if ($buildText -notmatch '0 Error\(s\)') { throw "Keil build failed: $BuildLog" }
+if ($null -ne $buildCode -and $buildCode -ne 0) {
+    Write-Warning "UV4 returned $buildCode although its log reports zero errors."
+}
 
 if ($Flash) {
     & $KeilExe -f $Uvprojx -o $FlashLog

@@ -4,7 +4,8 @@ param(
     [string]$CodexSkills = "$env:USERPROFILE\.codex\skills",
     [string]$ClaudeSkills = "$env:USERPROFILE\.claude\skills",
     [string]$TraeSkills = "$env:USERPROFILE\.trae\skills",
-    [string]$TraeCnSkills = "$env:USERPROFILE\.trae-cn\skills"
+    [string]$TraeCnSkills = "$env:USERPROFILE\.trae-cn\skills",
+    [string[]]$AdditionalSkillsRoots = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +25,7 @@ $destinations = @(
     (Join-Path $TraeSkills $skillName),
     (Join-Path $TraeCnSkills $skillName)
 )
+$destinations += $AdditionalSkillsRoots | ForEach-Object { Join-Path $_ $skillName }
 
 foreach ($dest in $destinations) {
     $parent = Split-Path $dest -Parent

@@ -25,6 +25,8 @@ if (-not $JLinkRttLogger) {
         "C:\Program Files\SEGGER\JLink\JLinkRTTLogger.exe",
         "C:\Program Files (x86)\SEGGER\JLink\JLinkRTTLogger.exe"
     )
+    $candidates += Get-ChildItem 'C:\Program Files\SEGGER' -Directory -Filter 'JLink*' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'JLinkRTTLogger.exe' }
     $JLinkRttLogger = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 if (-not $JLinkRttLogger -or -not (Test-Path -LiteralPath $JLinkRttLogger)) {

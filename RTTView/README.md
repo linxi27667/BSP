@@ -52,21 +52,26 @@ python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
 | SWD 烧录 | `flash_file` | ST-LINK_CLI `-P` | 有限 | 视配置 |
 | 串口烧录 | 共用 UART 页（pyserial / STM32 ISP） |  |  |  |
 
-### 服务器部署
+### 三种入口（顶栏「入口」）
 
-- **本机探针**：探针插在运行 `web_rttview.py` 的机器上
-- **远程探针（推荐：服务器 Web + 工位 USB）**：
-  1. **工位**（插 ST-Link/J-Link）：
-     ```shell
-     python probe_agent.py --host 0.0.0.0 --port 19201 --token 可选密钥
-     ```
-     防火墙放行 **19201**
-  2. **服务器**：
-     ```shell
-     python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
-     ```
-  3. 浏览器打开服务器页面 → **Agent** 填 `工位IP:19201`（有 token 则 `IP:19201:token`）→ **扫描** → 选带 `@ 工位IP` 的探针 → **连接**
-- 不要并行打开 Keil / RTT Viewer 占用同一探针
+| 入口 | 探针在哪 | 怎么连 |
+|------|----------|--------|
+| **浏览器直连 (WebUSB)** | 插在**你打开网页的电脑** | 点「连接」→ Chrome/Edge 弹出选 ST-Link → 自动 RTT |
+| **本机 USB (服务器)** | 插在跑 `web_rttview` 的机器 | 扫描 → 选探针 → 连接 |
+| **远程代理 (Agent)** | 插在另一台工位 | 工位跑 `probe_agent.py`，页面填 Agent 地址后扫描连接 |
+
+**WebUSB 注意（最省事、一点就连）：**
+- 仅 Chrome / Edge；探针必须在**浏览器所在电脑** USB 上
+- Windows 默认 ST 驱动常拦 WebUSB → 用 [Zadig](https://zadig.akeo.ie/) 把 ST-Link 绑成 **WinUSB**（之后官方 ST-LINK Utility 可能暂不可用，可换回驱动）
+- 也可不换驱动：工位跑 Agent，入口选「远程代理」
+
+**服务器部署示例：**
+```shell
+# 服务器
+python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
+# 你在自己电脑浏览器打开 http://服务器:5000
+# 入口选「浏览器直连」→ 连接（USB 在你电脑上）
+```
 
 ## 真机测试
 

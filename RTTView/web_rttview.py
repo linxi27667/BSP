@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 
@@ -441,6 +441,11 @@ def save_settings(settings):
 def index():
     return HTML_TEMPLATE
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    return send_from_directory(static_dir, filename)
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -465,86 +470,116 @@ def list_svd_files():
 
 # ─── Probe detection ──────────────────────────────────────────────────────
 
-@socketio.on('probe_detect')
-def handle_probe_detect(data=None):
-    # Always list every probe backend with a clear display name
+def _detect_local_probes():
+    """Probes attached to the machine running web_rttview."""
     probes = [
-        {'name': 'J-Link (本机)', 'type': 'jlink', 'backend': 'pylink'},
-        {'name': 'OpenOCD (本机 TCP:6666)', 'type': 'openocd', 'backend': 'openocd'},
+        {'name': 'J-Link', 'type': 'jlink', 'backend': 'pylink', 'available': True},
+        {'name': 'OpenOCD (TCP:6666)', 'type': 'openocd', 'backend': 'openocd', 'available': True},
     ]
     try:
         stlinks = STLinkProbe.detect()
         if not stlinks:
             probes.append({
-                'name': 'ST-Link (本机未检测到)',
+                'name': 'ST-Link (未检测到)',
                 'type': 'stlink', 'index': 0, 'backend': 'stlink', 'available': False,
             })
         for i, (dev, name) in enumerate(stlinks):
-            # detect() already returns a friendly label (may include CLI/SN)
             label = name if str(name).startswith('ST-Link') else f'ST-Link · {name}'
             probes.append({
-                'name': f'{label} (本机)',
-                'type': 'stlink', 'index': i, 'backend': 'stlink-cli' if dev is None else 'stlink',
+                'name': label,
+                'type': 'stlink', 'index': i,
+                'backend': 'stlink-cli' if dev is None else 'stlink',
                 'available': True,
             })
     except Exception as e:
         probes.append({
-            'name': f'ST-Link (本机检测失败: {e})',
+            'name': f'ST-Link (检测失败: {e})',
             'type': 'stlink', 'index': 0, 'backend': 'stlink', 'available': False,
         })
     try:
         daplinks = DAPLinkProbe.detect()
         if not daplinks:
             probes.append({
-                'name': 'DAPLink / CMSIS-DAP (本机未检测到 · pyOCD)',
+                'name': 'DAPLink / CMSIS-DAP (未检测到)',
                 'type': 'daplink', 'index': 0, 'backend': 'pyocd', 'available': False,
             })
         for i, probe in enumerate(daplinks):
             pname = getattr(probe, 'product_name', None) or 'CMSIS-DAP'
             uid = getattr(probe, 'unique_id', '') or ''
-            label = f'DAPLink · {pname}' + (f' ({uid})' if uid else '') + ' · pyOCD'
+            label = f'DAPLink · {pname}' + (f' ({uid})' if uid else '')
             probes.append({
-                'name': f'{label} (本机)',
+                'name': label,
                 'type': 'daplink', 'index': i, 'backend': 'pyocd', 'available': True,
             })
     except Exception as e:
         probes.append({
-            'name': f'DAPLink / CMSIS-DAP (本机不可用: {e})',
+            'name': f'DAPLink (不可用: {e})',
             'type': 'daplink', 'index': 0, 'backend': 'pyocd', 'available': False,
         })
+    return probes
 
-    # Remote agent probes (desk USB → server via probe_agent.py)
+
+def _detect_remote_probes(agent: str):
+    """Probes on a desk machine running probe_agent.py."""
+    agent = (agent or '').strip()
+    if not agent:
+        return [{
+            'name': '请填写 Agent 地址 (工位IP:19201)',
+            'type': 'remote', 'index': 0, 'remote_type': 'stlink',
+            'agent': '', 'backend': 'remote', 'available': False,
+        }]
+    try:
+        host, port, token = RemoteProbe.parse_agent(agent)
+        client = RemoteProbe(host, port, token)
+        remote_list = client._client.list_probes()
+        client._client.close()
+        agent_s = f'{host}:{port}' + (f':{token}' if token else '')
+        out = []
+        for p in remote_list:
+            out.append({
+                'name': p.get('name') or p.get('type') or 'probe',
+                'type': 'remote',
+                'remote_type': p.get('type') or 'stlink',
+                'index': int(p.get('index') or 0),
+                'agent': agent_s,
+                'backend': 'remote',
+                'available': bool(p.get('available', True)),
+            })
+        if not out:
+            out.append({
+                'name': f'Agent 无探针 ({host}:{port})',
+                'type': 'remote', 'index': 0, 'remote_type': 'stlink',
+                'agent': agent_s, 'backend': 'remote', 'available': False,
+            })
+        return out
+    except Exception as e:
+        return [{
+            'name': f'Agent 连接失败: {e}',
+            'type': 'remote', 'index': 0, 'remote_type': 'stlink',
+            'agent': agent, 'backend': 'remote', 'available': False,
+        }]
+
+
+@socketio.on('probe_detect')
+def handle_probe_detect(data=None):
+    """scope=local → 本机 USB; scope=remote → 工位 probe_agent。"""
     data = data or {}
+    scope = (data.get('scope') or 'local').strip().lower()
+    if scope not in ('local', 'remote'):
+        scope = 'local'
     agent = (data.get('agent') or state.get('probe_agent') or '').strip()
     if not agent:
         try:
             agent = (load_settings().get('agent') or '').strip()
         except Exception:
             agent = ''
-    if agent:
-        try:
-            host, port, token = RemoteProbe.parse_agent(agent)
-            client = RemoteProbe(host, port, token)  # just for client
-            remote_list = client._client.list_probes()
-            client._client.close()
-            for p in remote_list:
-                probes.append({
-                    'name': f"{p.get('name') or p.get('type')} @ {host}:{port}",
-                    'type': 'remote',
-                    'remote_type': p.get('type') or 'stlink',
-                    'index': int(p.get('index') or 0),
-                    'agent': f'{host}:{port}' + (f':{token}' if token else ''),
-                    'backend': 'remote',
-                    'available': bool(p.get('available', True)),
-                })
-        except Exception as e:
-            probes.append({
-                'name': f'远程 Agent 连接失败 ({agent}): {e}',
-                'type': 'remote', 'index': 0, 'remote_type': 'stlink',
-                'agent': agent, 'backend': 'remote', 'available': False,
-            })
 
-    emit('probe_list', {'probes': probes, 'agent': agent})
+    if scope == 'remote':
+        probes = _detect_remote_probes(agent)
+    else:
+        probes = _detect_local_probes()
+
+    emit('probe_list', {'probes': probes, 'agent': agent, 'scope': scope})
 
 @socketio.on('connect')
 def handle_socket_connect():
@@ -3881,10 +3916,24 @@ table { background: var(--bg-panel); border-radius: var(--radius); overflow: hid
             <div class="brand-sub">J-Link · ST-Link · DAPLink · RTT</div>
         </div>
     </div>
-    <label>Probe:</label>
-    <select id="probe-select">
-        <option value="">检测中...</option>
+    <label>入口:</label>
+    <select id="probe-scope" title="本机=服务器USB；远程=工位agent；浏览器=点一下连本机ST-Link">
+        <option value="webusb" selected>浏览器直连 (WebUSB)</option>
+        <option value="local">本机 USB (服务器)</option>
+        <option value="remote">远程代理 (Agent)</option>
     </select>
+    <span id="agent-box" style="display:none; align-items:center; gap:6px;">
+        <label>Agent:</label>
+        <input type="text" id="probe-agent" placeholder="工位IP:19201 或 IP:19201:token" spellcheck="false" style="width:180px" title="工位运行 python probe_agent.py --port 19201">
+    </span>
+    <span id="local-probe-box" style="display:none; align-items:center; gap:6px;">
+        <label>Probe:</label>
+        <select id="probe-select">
+            <option value="">检测中...</option>
+        </select>
+        <button class="btn" id="btn-probe-scan" onclick="detectProbes()" title="扫描探针">扫描</button>
+    </span>
+    <span id="webusb-hint" style="color:var(--text-dim); font-size:12px;">插上 ST-Link 后点连接，浏览器弹窗选设备</span>
     <label>Mode:</label>
     <select id="mode-select">
         <option value="arm" selected>ARM SWD</option>
@@ -3908,9 +3957,6 @@ table { background: var(--bg-panel); border-radius: var(--radius); overflow: hid
     <input type="number" id="rtt-channel" value="0" min="0" max="15" style="width:48px">
     <label>DLL:</label>
     <input type="text" id="jlink-dll" placeholder="可选 JLink_x64.dll 路径" spellcheck="false" style="width:160px" title="留空则使用 pylink 自动发现">
-    <label>Agent:</label>
-    <input type="text" id="probe-agent" placeholder="工位IP:19201" spellcheck="false" style="width:150px" title="探针代理 host:port 或 host:port:token；工位运行 probe_agent.py">
-    <button class="btn" id="btn-agent-scan" onclick="detectProbes()" title="重新扫描本机+远程探针">扫描</button>
     <label>Encoding:</label>
     <select id="encoding-select">
         <option value="auto">自动检测</option>
@@ -4498,16 +4544,36 @@ function switchTab(tabId) {
     document.getElementById(`panel-${tabId}`).classList.add('active');
 }
 
-// ─── Probe detection ──────────────────────────────────────────────────
-function detectProbes() {
-    var agent = (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim();
-    socket.emit('probe_detect', {agent: agent});
-}
-
-// Remember user / settings probe choice across detect refreshes
-var preferredProbe = null;  // {type, index, agent, remote_type}
+// ─── Probe scope: webusb | local | remote ─────────────────────────────
+var preferredProbe = null;
 var connecting = false;
 var lastProbeListSig = '';
+var connected = false;
+var webusbMode = false;
+var webusbClient = null;
+
+function getProbeScope() {
+    var el = document.getElementById('probe-scope');
+    return el ? el.value : 'webusb';
+}
+
+function updateScopeUi() {
+    var scope = getProbeScope();
+    var agentBox = document.getElementById('agent-box');
+    var localBox = document.getElementById('local-probe-box');
+    var hint = document.getElementById('webusb-hint');
+    if (agentBox) agentBox.style.display = (scope === 'remote') ? 'inline-flex' : 'none';
+    if (localBox) localBox.style.display = (scope === 'local' || scope === 'remote') ? 'inline-flex' : 'none';
+    if (hint) hint.style.display = (scope === 'webusb') ? 'inline' : 'none';
+    if (scope === 'local' || scope === 'remote') detectProbes();
+}
+
+function detectProbes() {
+    var scope = getProbeScope();
+    if (scope === 'webusb') return;
+    var agent = (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim();
+    socket.emit('probe_detect', {scope: scope === 'remote' ? 'remote' : 'local', agent: agent});
+}
 
 function getSelectedProbe() {
     try {
@@ -4530,19 +4596,15 @@ function setPreferredProbe(p) {
 
 socket.on('probe_list', function(data) {
     const sel = document.getElementById('probe-select');
+    if (!sel) return;
     const prev = getSelectedProbe() || preferredProbe;
-    // Signature: skip full rebuild if list unchanged (avoids wiping selection)
-    var sig = (data.probes || []).map(function(p) {
+    var sig = (data.scope || '') + '|' + (data.probes || []).map(function(p) {
         return (p.type || '') + ':' + (p.index || 0) + ':' + (p.name || '') + ':' + (p.available !== false) + ':' + (p.agent || '') + ':' + (p.remote_type || '');
     }).join('|');
-    if (sig === lastProbeListSig && sel.options.length > 0) {
-        return;
-    }
+    if (sig === lastProbeListSig && sel.options.length > 0) return;
     lastProbeListSig = sig;
-
     sel.innerHTML = '';
     var preferIdx = 0;
-    // Prefer remote ST-Link / local ST-Link when available if no prior choice
     var autoPrefer = null;
     (data.probes || []).forEach(function(p, i) {
         const opt = document.createElement('option');
@@ -4573,16 +4635,19 @@ socket.on('probe_list', function(data) {
     }
 });
 
-// Keep preferredProbe in sync when user changes dropdown
-document.getElementById('probe-select').addEventListener('change', function() {
+var probeSelEl = document.getElementById('probe-select');
+if (probeSelEl) probeSelEl.addEventListener('change', function() {
     setPreferredProbe(getSelectedProbe());
 });
-
-// ─── Connection ─────────────────────────────────────────────────────
-var connected = false;
+var scopeEl = document.getElementById('probe-scope');
+if (scopeEl) scopeEl.addEventListener('change', function() {
+    lastProbeListSig = '';
+    updateScopeUi();
+});
 
 function appendTerminal(text, color) {
     const el = document.getElementById('rtt-terminal');
+    if (!el) return;
     if (color) {
         const span = document.createElement('span');
         span.style.color = color;
@@ -4595,7 +4660,6 @@ function appendTerminal(text, color) {
 }
 
 function setConnectUi(state) {
-    // state: idle | connecting | connected
     var btn = document.getElementById('btn-connect');
     var led = document.getElementById('status-led');
     var txt = document.getElementById('status-text');
@@ -4615,6 +4679,7 @@ function setConnectUi(state) {
     } else {
         connecting = false;
         connected = false;
+        webusbMode = false;
         btn.disabled = false;
         btn.textContent = '连接';
         btn.classList.remove('connected');
@@ -4623,12 +4688,71 @@ function setConnectUi(state) {
     }
 }
 
+function decodeRttBytes(u8) {
+    try {
+        return new TextDecoder('utf-8', {fatal: false}).decode(u8);
+    } catch (e) {
+        var s = '';
+        for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+        return s;
+    }
+}
+
+async function connectWebUsb() {
+    if (typeof WebUsbStlinkRtt === 'undefined') {
+        appendTerminal('[!] WebUSB 脚本未加载\n', '#f44336');
+        setConnectUi('idle');
+        return;
+    }
+    webusbClient = new WebUsbStlinkRtt();
+    webusbClient.onStatus = function(m) { appendTerminal('[WebUSB] ' + m + '\n', '#569cd6'); };
+    webusbClient.onData = function(u8) {
+        var t = decodeRttBytes(u8);
+        if (t) appendTerminal(t);
+    };
+    try {
+        appendTerminal('[*] 浏览器将弹出 USB 设备选择（ST-Link）...\n', '#569cd6');
+        await webusbClient.connect();
+        await webusbClient.startRtt({base: 0x20000000, size: 0x10000});
+        connected = true;
+        webusbMode = true;
+        setConnectUi('connected');
+        document.getElementById('status-text').textContent = '已连接 (WebUSB ST-Link)';
+        appendTerminal('[+] WebUSB RTT 已启动 @ 0x' + webusbClient.cb.toString(16) + '\n', '#4caf50');
+        if (document.getElementById('rtt-stats')) {
+            document.getElementById('rtt-stats').textContent = '0x' + webusbClient.cb.toString(16);
+        }
+    } catch (e) {
+        appendTerminal('[!] WebUSB 失败: ' + (e.message || e) + '\n', '#f44336');
+        appendTerminal('[*] 提示: Chrome/Edge；Windows 需 Zadig 把 ST-Link 绑成 WinUSB\n', 'orange');
+        try { await webusbClient.disconnect(); } catch (x) {}
+        webusbClient = null;
+        setConnectUi('idle');
+    }
+}
+
+async function disconnectWebUsb() {
+    if (webusbClient) {
+        try { webusbClient.stopRtt(); await webusbClient.disconnect(); } catch (e) {}
+        webusbClient = null;
+    }
+    webusbMode = false;
+    setConnectUi('idle');
+    appendTerminal('[*] WebUSB 已断开\n', '#569cd6');
+}
+
 document.getElementById('btn-connect').addEventListener('click', function() {
     if (connecting) return;
     if (!connected) {
+        var scope = getProbeScope();
+        if (scope === 'webusb') {
+            setConnectUi('connecting');
+            connectWebUsb();
+            return;
+        }
         const sel = document.getElementById('probe-select');
-        if (!sel.value) {
-            appendTerminal('[!] 请先选择探针\n', '#f44336');
+        if (!sel || !sel.value) {
+            appendTerminal('[!] 请先扫描并选择探针\n', '#f44336');
             return;
         }
         const probeData = JSON.parse(sel.value);
@@ -4636,6 +4760,11 @@ document.getElementById('btn-connect').addEventListener('click', function() {
         const dll = (document.getElementById('jlink-dll').value || '').trim();
         var agent = (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim();
         if (probeData.agent) agent = probeData.agent;
+        if (scope === 'remote' && probeData.type !== 'remote') {
+            // force remote path
+            probeData.type = 'remote';
+            probeData.remote_type = probeData.remote_type || probeData.type;
+        }
         setConnectUi('connecting');
         var label = probeData.type === 'remote'
             ? ('remote/' + (probeData.remote_type || '?') + ' @ ' + (agent || '?'))
@@ -4653,23 +4782,29 @@ document.getElementById('btn-connect').addEventListener('click', function() {
             remote_type: probeData.remote_type || '',
         });
     } else {
-        socket.emit('probe_disconnect');
+        if (webusbMode) {
+            disconnectWebUsb();
+        } else {
+            socket.emit('probe_disconnect');
+        }
     }
 });
 
 socket.on('connected', function(data) {
     connected = true;
+    webusbMode = false;
     setConnectUi('connected');
     var modeTag = data.mode ? ('/' + data.mode) : '';
     document.getElementById('status-text').textContent = '已连接 (' + data.probe_type + modeTag + ')';
-    // Lock dropdown selection to the probe we actually connected
     setPreferredProbe({type: data.probe_type, index: data.index || 0, agent: data.agent || '', remote_type: data.remote_type || ''});
     var sel = document.getElementById('probe-select');
-    for (var i = 0; i < sel.options.length; i++) {
-        try {
-            var o = JSON.parse(sel.options[i].value);
-            if (o.type === data.probe_type) { sel.selectedIndex = i; break; }
-        } catch (e) {}
+    if (sel) {
+        for (var i = 0; i < sel.options.length; i++) {
+            try {
+                var o = JSON.parse(sel.options[i].value);
+                if (o.type === data.probe_type) { sel.selectedIndex = i; break; }
+            } catch (e) {}
+        }
     }
     if (data.rtt_found) {
         var ch = (data.channel !== undefined) ? data.channel : 0;
@@ -4677,7 +4812,6 @@ socket.on('connected', function(data) {
         if (data.rtt_addr && document.getElementById('rtt-addr').value.toLowerCase() === 'auto') {
             document.getElementById('rtt-stats').textContent = data.rtt_addr;
         }
-        // Server auto-starts RTT on connect. Only nudge for restored sessions.
         if (data.session_restored) {
             setTimeout(startRTT, 80);
         }
@@ -4696,7 +4830,6 @@ socket.on('disconnected', function() {
 
 socket.on('error', function(data) {
     appendTerminal('[!] Error: ' + data.message + '\n', '#f44336');
-    // connect failure must not leave UI in "connected" state
     if (!connected || connecting) {
         setConnectUi('idle');
     }
@@ -4708,9 +4841,10 @@ socket.on('error', function(data) {
     }
 });
 
-// Detect probes on load; refresh slowly so we never thrash the dropdown selection
-detectProbes();
+// init scope UI; only poll local/remote lists when those modes selected
+updateScopeUi();
 setInterval(function() {
+    if (getProbeScope() === 'webusb') return;
     // Skip refresh while connecting / connected (avoids USB contention + UI flicker)
     if (connecting || connected) return;
     detectProbes();
@@ -4723,12 +4857,24 @@ let rttTotalBytes = 0;
 let rttLogBuffer = '';  // full text for save (survives DOM trim)
 
 function startRTT() {
+    if (webusbMode) {
+        appendTerminal('[*] WebUSB RTT 已在浏览器侧运行\n', '#569cd6');
+        return;
+    }
     const encoding = document.getElementById('encoding-select').value;
     socket.emit('rtt_start', {encoding: encoding});
     appendTerminal('[*] RTT reading started\n', '#569cd6');
 }
 
 function rescanRTT() {
+    if (webusbMode && webusbClient) {
+        webusbClient.findRtt(0x20000000, 0x10000).then(function(cb) {
+            appendTerminal('[+] WebUSB RTT @ 0x' + cb.toString(16) + '\n', '#4caf50');
+        }).catch(function(e) {
+            appendTerminal('[!] ' + e.message + '\n', '#f44336');
+        });
+        return;
+    }
     socket.emit('rtt_rescan', {
         address: document.getElementById('rtt-addr').value,
         channel: parseInt(document.getElementById('rtt-channel').value) || 0,
@@ -4736,6 +4882,11 @@ function rescanRTT() {
 }
 
 function stopRTT() {
+    if (webusbMode && webusbClient) {
+        webusbClient.stopRtt();
+        appendTerminal('[*] WebUSB RTT 已暂停\n', '#569cd6');
+        return;
+    }
     socket.emit('rtt_stop');
     appendTerminal('[*] RTT reading stopped\n', '#569cd6');
 }
@@ -5458,6 +5609,16 @@ function mcuReset(haltAfter) {
         appendTerminal('[!] 未连接探针，无法复位\n', '#e03e3e');
         return;
     }
+    if (webusbMode && webusbClient) {
+        appendTerminal('[*] WebUSB 复位 MCU...\n', '#569cd6');
+        webusbClient.reset().then(function() {
+            appendTerminal('[+] WebUSB 复位后 RTT @ 0x' + webusbClient.cb.toString(16) + '\n', '#4caf50');
+            if (!webusbClient.running) webusbClient.startRtt({base: 0x20000000, size: 0x10000});
+        }).catch(function(e) {
+            appendTerminal('[!] 复位失败: ' + e.message + '\n', '#f44336');
+        });
+        return;
+    }
     socket.emit('mcu_reset', {halt_after: !!haltAfter});
     appendTerminal(haltAfter ? '[*] 复位+Halt...\n' : '[*] 复位 MCU...\n', '#569cd6');
     try { flashLog('info', haltAfter ? '复位+Halt 请求已发送' : 'MCU 复位请求已发送'); } catch(e) {}
@@ -6173,6 +6334,7 @@ document.getElementById('btn-connect').addEventListener('click', function() {
     }
 });
 </script>
+<script src="/static/webusb_stlink_rtt.js"></script>
 </body>
 </html>"""
 

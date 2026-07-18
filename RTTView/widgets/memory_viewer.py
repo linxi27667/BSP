@@ -153,6 +153,9 @@ class MemoryViewer(QWidget):
             )
             return
 
+        # Align to 16-byte boundary for clean hex dump display
+        addr = addr & ~0xF
+
         # Parse length
         try:
             length = int(self.txt_len.text().strip(), 0)
@@ -195,7 +198,7 @@ class MemoryViewer(QWidget):
         lines: list[str] = []
 
         # -- Header row ---------------------------------------------------
-        header_cells = ['<span style="color:{0};">{0}</span>'.format(CYAN)]
+        header_cells = ['<span style="color:{0};">Addr</span>'.format(CYAN)]
         header_cells.append('     ')
         for col in range(16):
             header_cells.append(

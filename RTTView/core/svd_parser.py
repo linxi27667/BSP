@@ -228,9 +228,24 @@ def parse_svd(path: str) -> Device:
     -------
     Device
         Fully-populated device tree with peripherals, registers, and fields.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the SVD file does not exist.
+    ET.ParseError
+        If the XML is malformed.
+    ValueError
+        If the file is not a valid SVD (missing required elements).
     """
-    tree = ET.parse(path)
+    try:
+        tree = ET.parse(path)
+    except ET.ParseError as e:
+        raise ValueError(f"Malformed SVD XML: {e}") from e
+
     root = tree.getroot()
+    if root.tag != 'device':
+        raise ValueError(f"Expected <device> root element, got <{root.tag}>")
 
     name = _text(root.find("name"))
     description = _text(root.find("description"))

@@ -96,12 +96,14 @@ class DAPLinkProbe(DebugProbe):
 
     # -- Registers ----------------------------------------------
     def read_reg(self, reg):
+        reg = reg.lower()
         return self._cortex.read_core_register_raw(reg)
 
     def read_regs(self, rlist):
-        return dict(zip(rlist, self._cortex.read_core_registers_raw(rlist)))
+        return dict(zip(rlist, self._cortex.read_core_registers_raw([r.lower() for r in rlist])))
 
     def write_reg(self, reg, val):
+        reg = reg.lower()
         self._cortex.write_core_register_raw(reg, val)
 
     # -- CPU Control --------------------------------------------
@@ -119,6 +121,16 @@ class DAPLinkProbe(DebugProbe):
 
     def halted(self):
         return self._cortex.is_halted()
+
+    # -- SWO (not supported via pyocd CortexM wrapper) -----------------
+    def swo_start(self, speed):
+        raise NotImplementedError("SWO not supported by DAPLink probe wrapper")
+
+    def swo_stop(self):
+        pass
+
+    def swo_read(self):
+        return b''
 
 
 register_probe('daplink', DAPLinkProbe)

@@ -39,6 +39,7 @@ class SWOConsole(QWidget):
         self._total_samples = 0
         self._elf_symbols = {}    # addr -> (name, size)
         self._elf_sorted = []     # sorted [(addr, name, size), ...]
+        self._poll_counter = 0
 
         self._register_decoder_callbacks()
         self._init_ui()
@@ -204,32 +205,89 @@ class SWOConsole(QWidget):
         self._elf_sorted.clear()
 
         try:
-            import subprocess
-            result = subprocess.run(
-                ['readelf', '-sW', path],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
+            import struct as _struct
+            with open(path, 'rb') as f:
+                data = f.read()
+
+            if len(data) < 16 or data[:4] != b'\x7fELF':
                 return
 
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 8:
-                    continue
-                try:
-                    addr = int(parts[1], 16)
-                    size = int(parts[2])
-                    name = parts[7]
-                    # Filter: must have size > 0 and be a function (FUNC)
-                    if size > 0 and 'FUNC' in line:
-                        self._elf_symbols[addr] = (name, size)
-                        self._elf_sorted.append((addr, name, size))
-                except (ValueError, IndexError):
-                    continue
+            is_64 = data[4] == 2
+            is_le = data[5] == 1
+
+            if is_64 or not is_le:
+                return  # Only 32-bit little-endian supported
+
+            # ELF32 header
+            e_shoff = _struct.unpack_from('<I', data, 32)[0]
+            e_shentsize = _struct.unpack_from('<H', data, 46)[0]
+            e_shnum = _struct.unpack_from('<H', data, 48)[0]
+            e_shstrndx = _struct.unpack_from('<H', data, 50)[0]
+
+            def read_shdr(idx):
+                off = e_shoff + idx * e_shentsize
+                return _struct.unpack_from('<IIIIIIIIII', data, off)
+
+            if e_shstrndx >= e_shnum:
+                return
+
+            # Section name string table
+            shstr_shdr = read_shdr(e_shstrndx)
+            shstr_off = shstr_shdr[4]
+            shstr_size = shstr_shdr[5]
+            shstr_data = data[shstr_off:shstr_off + shstr_size]
+
+            def section_name(idx):
+                shdr = read_shdr(idx)
+                name_off = shdr[0]
+                end = shstr_data.find(b'\x00', name_off)
+                if end == -1:
+                    return ''
+                return shstr_data[name_off:end].decode('ascii', errors='replace')
+
+            # Find .symtab and .strtab
+            symtab_idx = strtab_idx = -1
+            for i in range(e_shnum):
+                name = section_name(i)
+                if name == '.symtab':
+                    symtab_idx = i
+                elif name == '.strtab':
+                    strtab_idx = i
+
+            if symtab_idx < 0 or strtab_idx < 0:
+                return
+
+            symtab_shdr = read_shdr(symtab_idx)
+            strtab_shdr = read_shdr(strtab_idx)
+
+            sym_off = symtab_shdr[4]
+            sym_size = symtab_shdr[5]
+            sym_entsize = symtab_shdr[9] if symtab_shdr[9] else 16
+
+            str_off = strtab_shdr[4]
+            str_size = strtab_shdr[5]
+            str_data = data[str_off:str_off + str_size]
+
+            # Parse function symbols
+            count = sym_size // sym_entsize
+            for i in range(count):
+                ent = _struct.unpack_from('<IIIIBBH', data, sym_off + i * sym_entsize)
+                st_name, st_value, st_size, st_info, st_other, st_shndx = ent
+                st_type = st_info & 0xF
+
+                # Only function symbols (STT_FUNC = 2) with size > 0
+                if st_type == 2 and st_value != 0 and st_size > 0 and st_shndx != 0:
+                    end = str_data.find(b'\x00', st_name)
+                    if end == -1:
+                        continue
+                    sym_name = str_data[st_name:end].decode('ascii', errors='replace')
+                    if sym_name:
+                        self._elf_symbols[st_value] = (sym_name, st_size)
+                        self._elf_sorted.append((st_value, sym_name, st_size))
 
             self._elf_sorted.sort(key=lambda x: x[0])
         except Exception:
-            pass  # readelf not available — symbol resolution disabled
+            pass  # Symbol resolution disabled on error
 
     # ------------------------------------------------------------------
     # Control
@@ -345,7 +403,7 @@ class SWOConsole(QWidget):
                 cursor.removeSelectedText()
 
         # Profiler table (update less frequently — every ~500ms via counter)
-        self._poll_counter = getattr(self, '_poll_counter', 0) + 1
+        self._poll_counter += 1
         if self._poll_counter >= 50:  # 50 * 10ms = 500ms
             self._poll_counter = 0
             self._update_profiler_table()

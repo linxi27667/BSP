@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox,
-    QTextEdit, QLabel, QFileDialog, QGroupBox,
+    QTextEdit, QLabel, QFileDialog, QGroupBox, QLineEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtGui import QFont
@@ -12,7 +12,7 @@ import bisect
 import struct
 
 from widgets.styles import (
-    RED, FONT_MONO, FONT_SIZE,
+    RED, FONT_MONO, FONT_SIZE, font_size_int,
     toolbar_style, text_edit_style,
 )
 
@@ -36,6 +36,7 @@ class CrashAnalyzer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._probe = None
+        self._mode = 'arm'
         self._elf_symbols: dict[int, str] = {}  # addr -> symbol name
         self._sorted_addrs: list[int] = []  # sorted for bisect lookup
         self._init_ui()
@@ -65,6 +66,16 @@ class CrashAnalyzer(QWidget):
 
         toolbar.addStretch()
 
+        toolbar.addWidget(QLabel("Flash基址:"))
+        self.txt_flash_base = QLineEdit("0x08000000")
+        self.txt_flash_base.setFixedWidth(100)
+        toolbar.addWidget(self.txt_flash_base)
+
+        toolbar.addWidget(QLabel("结束:"))
+        self.txt_flash_end = QLineEdit("0x08200000")
+        self.txt_flash_end.setFixedWidth(100)
+        toolbar.addWidget(self.txt_flash_end)
+
         self.btn_load_elf = QPushButton("加载ELF...")
         self.btn_load_elf.setFixedWidth(100)
         self.btn_load_elf.clicked.connect(self._on_load_elf)
@@ -79,7 +90,7 @@ class CrashAnalyzer(QWidget):
 
         self.txt_report = QTextEdit()
         self.txt_report.setReadOnly(True)
-        self.txt_report.setFont(QFont(FONT_MONO, int(FONT_SIZE.replace("px", ""))))
+        self.txt_report.setFont(QFont(FONT_MONO, font_size_int()))
         self.txt_report.setStyleSheet(text_edit_style())
         report_layout.addWidget(self.txt_report)
         layout.addWidget(report_group)
@@ -87,9 +98,10 @@ class CrashAnalyzer(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def set_probe(self, probe):
+    def set_probe(self, probe, mode='arm'):
         """Receive the DebugProbe instance after MCU connection."""
         self._probe = probe
+        self._mode = mode
         self.btn_capture.setEnabled(probe is not None)
 
     def load_elf(self, path: str):
@@ -128,9 +140,13 @@ class CrashAnalyzer(QWidget):
     # ------------------------------------------------------------------
     def _capture_crash(self):
         """Read registers, fault status, and build crash report."""
+        if self._mode == 'rv':
+            self._capture_crash_riscv()
+            return
+
         report: list[str] = []
         report.append("=" * 60)
-        report.append("  CRASH ANALYSIS REPORT")
+        report.append("  CRASH ANALYSIS REPORT (ARM Cortex-M)")
         report.append("=" * 60)
         report.append("")
 
@@ -220,6 +236,95 @@ class CrashAnalyzer(QWidget):
 
         self.txt_report.setText("\n".join(report))
 
+    def _capture_crash_riscv(self):
+        """Read RISC-V registers and mcause/mtval for crash analysis."""
+        report: list[str] = []
+        report.append("=" * 60)
+        report.append("  CRASH ANALYSIS REPORT (RISC-V)")
+        report.append("=" * 60)
+        report.append("")
+
+        # -- Core registers ---------------------------------------------
+        report.append("--- Core Registers ---")
+        rv_reg_names = [
+            'x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7',
+            'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15',
+            'x16', 'x17', 'x18', 'x19', 'x20', 'x21', 'x22', 'x23',
+            'x24', 'x25', 'x26', 'x27', 'x28', 'x29', 'x30', 'x31',
+            'pc', 'mstatus', 'mcause', 'mtval',
+        ]
+        reg_values: dict[str, int] = {}
+        for name in rv_reg_names:
+            try:
+                val = self._probe.read_reg(name)
+                reg_values[name] = val
+                sym = self._resolve_symbol(val)
+                sym_str = f"  ({sym})" if sym else ""
+                report.append(f"  {name:>8s} = 0x{val:08X}{sym_str}")
+            except Exception as e:
+                report.append(f"  {name:>8s} = <read error: {e}>")
+        report.append("")
+
+        # -- mcause decode ----------------------------------------------
+        if 'mcause' in reg_values:
+            mcause = reg_values['mcause']
+            report.append("--- mcause Decode ---")
+            is_interrupt = (mcause >> 31) & 1
+            code = mcause & 0x7FFFFFFF
+            cause_type = "Interrupt" if is_interrupt else "Exception"
+            cause_names = {
+                0: "Instruction address misaligned",
+                1: "Instruction access fault",
+                2: "Illegal instruction",
+                3: "Breakpoint",
+                4: "Load address misaligned",
+                5: "Load access fault",
+                6: "Store/AMO address misaligned",
+                7: "Store/AMO access fault",
+                8: "Environment call from U-mode",
+                9: "Environment call from S-mode",
+                11: "Environment call from M-mode",
+                12: "Instruction page fault",
+                13: "Load page fault",
+                15: "Store/AMO page fault",
+            }
+            cause_name = cause_names.get(code, f"Unknown ({code})")
+            report.append(f"  Type  : {cause_type}")
+            report.append(f"  Code  : {code} ({cause_name})")
+            report.append(f"  mcause: 0x{mcause:08X}")
+            report.append("")
+
+        # -- mtval (trap value) -----------------------------------------
+        if 'mtval' in reg_values:
+            mtval = reg_values['mtval']
+            report.append("--- mtval (Trap Value) ---")
+            sym = self._resolve_symbol(mtval)
+            sym_str = f" ({sym})" if sym else ""
+            report.append(f"  mtval = 0x{mtval:08X}{sym_str}")
+            report.append("")
+
+        # -- mstatus decode ---------------------------------------------
+        if 'mstatus' in reg_values:
+            mstatus = reg_values['mstatus']
+            report.append("--- mstatus Decode ---")
+            mie = (mstatus >> 3) & 1
+            mpie = (mstatus >> 7) & 1
+            mpp = (mstatus >> 11) & 0x3
+            priv_names = {0: 'User', 1: 'Supervisor', 2: 'Reserved', 3: 'Machine'}
+            report.append(f"  MIE  (Machine Interrupt Enable): {mie}")
+            report.append(f"  MPIE (Machine Previous IE)     : {mpie}")
+            report.append(f"  MPP  (Machine Previous Priv)   : {mpp} ({priv_names.get(mpp, '?')})")
+            report.append("")
+
+        # -- Call stack walk --------------------------------------------
+        report.append("--- Call Stack (heuristic) ---")
+        self._walk_stack(reg_values, report)
+        report.append("")
+
+        report.append("=" * 60)
+
+        self.txt_report.setText("\n".join(report))
+
     # ------------------------------------------------------------------
     # CFSR decode
     # ------------------------------------------------------------------
@@ -276,10 +381,17 @@ class CrashAnalyzer(QWidget):
             report.append("  <no probe>")
             return
 
-        sp = reg_values.get('SP', 0)
+        sp = reg_values.get('SP', 0) or reg_values.get('x2', 0)  # ARM SP or RISC-V x2/sp
         if sp == 0:
             report.append("  <SP not available>")
             return
+
+        # Read flash region from UI fields
+        try:
+            flash_base = int(self.txt_flash_base.text().strip(), 0)
+            flash_end = int(self.txt_flash_end.text().strip(), 0)
+        except ValueError:
+            flash_base, flash_end = _FLASH_BASE, _FLASH_END
 
         # Read 1KB of stack
         stack_size = 1024
@@ -297,12 +409,12 @@ class CrashAnalyzer(QWidget):
         found: list[tuple[int, int]] = []  # (stack_offset, address)
         for i in range(0, len(stack_data) - 3, 4):
             val = struct.unpack_from('<I', stack_data, i)[0]
-            # Thumb addresses have bit 0 set
+            # Thumb addresses have bit 0 set (ARM only)
             if val & 1:
                 addr = val & ~1
             else:
                 addr = val
-            if _FLASH_BASE <= addr < _FLASH_END:
+            if flash_base <= addr < flash_end:
                 found.append((i, val))
 
         if not found:

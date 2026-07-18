@@ -155,11 +155,13 @@ class _LegacyAdapter(DebugProbe):
             if self._legacy.mode.startswith('rv'):
                 self._legacy.reset()
             else:
-                self.resetStopOnReset()
+                self._legacy.reset()
+                self._legacy.halt()
                 self.write_reg('xpsr', 0x1000000)
         else:
             # pyocd CortexM: reset + halt
-            self.resetStopOnReset()
+            self._legacy.reset()
+            self._legacy.halt()
             self.write_reg('xpsr', 0x1000000)
 
     @property
@@ -193,10 +195,12 @@ class XLink(object):
         def add_alias(regs, name1, name2, name3=None):
             if name1 in regs:
                 regs[name2] = regs[name1]
-                regs[name3] = regs[name1]
+                if name3:
+                    regs[name3] = regs[name1]
             elif name2 in regs:
                 regs[name1] = regs[name2]
-                regs[name3] = regs[name2]
+                if name3:
+                    regs[name3] = regs[name2]
             elif name3 and name3 in regs:
                 regs[name1] = regs[name3]
                 regs[name2] = regs[name3]
@@ -332,7 +336,7 @@ class XLink(object):
 
             core_type = (cpuid & CPUID_PARTNO_Msk) >> CPUID_PARTNO_Pos
 
-            return self.CORE_TYPE_NAME[core_type]
+            return self.CORE_TYPE_NAME.get(core_type, f'Unknown(0x{core_type:03X})')
 
         elif self.mode.startswith('rv'):
             halted = self.halted()
@@ -340,9 +344,10 @@ class XLink(object):
             isa = self.read_reg('misa')
             if not halted: self.go()
 
-            if ((isa >> 30) & 3) == 1:
+            mxl = (isa >> 30) & 3
+            if mxl == 1:
                 name = 'RV32'
-            elif ((isa >> 62) & 3) == 2:
+            elif mxl == 2:
                 name = 'RV64'
             else:
                 return 'RISC-V'

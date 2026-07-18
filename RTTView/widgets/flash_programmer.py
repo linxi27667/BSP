@@ -4,7 +4,7 @@ from __future__ import annotations
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QTextEdit, QCheckBox, QLabel, QGroupBox, QProgressBar,
-    QComboBox, QFileDialog,
+    QComboBox, QFileDialog, QApplication,
 )
 from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtGui import QFont
@@ -13,7 +13,7 @@ import struct
 import os
 
 from widgets.styles import (
-    RED, TEAL, FONT_MONO, FONT_SIZE,
+    RED, TEAL, FONT_MONO, FONT_SIZE, font_size_int,
     toolbar_style, text_edit_style, progress_bar_style,
 )
 
@@ -72,7 +72,7 @@ class FlashProgrammer(QWidget):
         # -- Operation buttons ------------------------------------------
         btn_row = QHBoxLayout()
 
-        self.btn_erase = QPushButton("复位MCU")
+        self.btn_erase = QPushButton("擦除MCU")
         self.btn_erase.setFixedWidth(100)
         self.btn_erase.clicked.connect(self._on_erase)
         self.btn_erase.setEnabled(False)
@@ -113,7 +113,7 @@ class FlashProgrammer(QWidget):
 
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
-        self.txt_log.setFont(QFont(FONT_MONO, int(FONT_SIZE.replace("px", ""))))
+        self.txt_log.setFont(QFont(FONT_MONO, font_size_int()))
         self.txt_log.setStyleSheet(text_edit_style())
         log_layout.addWidget(self.txt_log)
         layout.addWidget(log_group)
@@ -151,18 +151,42 @@ class FlashProgrammer(QWidget):
 
     @pyqtSlot()
     def _on_erase(self):
-        """Reset MCU via AIRCR SYSRESETREQ (Cortex-M standard)."""
+        """Mass-erase STM32 flash via flash controller, then reset."""
         if not self._probe:
             self._log("未连接探针。", error=True)
             return
-        self._log("Resetting MCU via SYSRESETREQ...")
+        self._log("Erasing STM32 flash (mass erase)...")
         try:
-            # AIRCR: Application Interrupt and Reset Control Register
-            # VECTKEY=0x05FA, SYSRESETREQ=bit 2
+            # STM32 flash controller registers
+            FLASH_KEYR   = 0x40022004
+            FLASH_CR     = 0x40022010
+            FLASH_SR     = 0x4002200C
+
+            # Unlock flash: write KEY1 then KEY2
+            self._probe.write_U32(FLASH_KEYR, 0x45670123)
+            self._probe.write_U32(FLASH_KEYR, 0xCDEF89AB)
+
+            # Set MER (Mass Erase, bit 2) and STRT (Start, bit 6)
+            self._probe.write_U32(FLASH_CR, (1 << 2) | (1 << 6))
+
+            # Wait for BSY (bit 0 of SR) to clear
+            import time
+            for _ in range(100):
+                sr = self._probe.read_U32(FLASH_SR)
+                if not (sr & 1):
+                    break
+                import time
+                time.sleep(0.05)
+                QApplication.processEvents()
+
+            # Lock flash: set LOCK bit (bit 7 of CR)
+            self._probe.write_U32(FLASH_CR, 1 << 7)
+
+            # Reset MCU
             self._probe.write_U32(0xE000ED0C, 0x05FA0004)
-            self._log("MCU reset complete.", ok=True)
+            self._log("Flash erase complete. MCU reset.", ok=True)
         except Exception as e:
-            self._log(f"Reset failed: {e}", error=True)
+            self._log(f"Erase failed: {e}", error=True)
 
     @pyqtSlot()
     def _on_flash(self):
@@ -236,18 +260,14 @@ class FlashProgrammer(QWidget):
         self.progress.setMaximum(len(data))
         self.progress.setValue(0)
 
-        # Write in 256-byte chunks
-        chunk_size = 256
-        offset = 0
-        while offset < len(data):
-            chunk = data[offset:offset + chunk_size]
-            try:
-                self._probe.write_mem_U8(base_addr + offset, list(chunk))
-            except Exception as e:
-                self._log(f"Write error at offset 0x{offset:X}: {e}", error=True)
-                return
-            offset += len(chunk)
-            self.progress.setValue(offset)
+        # Use STM32 flash programming for flash region, raw writes for SRAM
+        if 0x08000000 <= base_addr < 0x10000000:
+            ok = self._flash_stm32(base_addr, data)
+        else:
+            ok = self._flash_raw(base_addr, data)
+
+        if not ok:
+            return
 
         self._log(f"Flash complete: {len(data)} bytes written.", ok=True)
 
@@ -259,6 +279,86 @@ class FlashProgrammer(QWidget):
                 self._log("Reset complete.", ok=True)
             except Exception as e:
                 self._log(f"Reset failed: {e}", error=True)
+
+    # ------------------------------------------------------------------
+    # Flash implementations
+    # ------------------------------------------------------------------
+    def _flash_stm32(self, base_addr: int, data: bytes) -> bool:
+        """Program STM32 flash via flash controller registers."""
+        FLASH_KEYR = 0x40022004
+        FLASH_CR   = 0x40022010
+        FLASH_SR   = 0x4002200C
+
+        try:
+            # Unlock flash
+            self._probe.write_U32(FLASH_KEYR, 0x45670123)
+            self._probe.write_U32(FLASH_KEYR, 0xCDEF89AB)
+        except Exception as e:
+            self._log(f"Flash unlock failed: {e}", error=True)
+            return False
+
+        # Program in 16-bit half-words (STM32 flash programming width)
+        offset = 0
+        while offset < len(data):
+            # Set PG bit (bit 0 of FLASH_CR)
+            self._probe.write_U32(FLASH_CR, 1 << 0)
+
+            # Write one half-word (16 bits)
+            hw = data[offset]
+            if offset + 1 < len(data):
+                hw |= data[offset + 1] << 8
+            try:
+                self._probe.write_U16(base_addr + offset, hw)
+            except Exception as e:
+                self._log(f"Write error at 0x{base_addr + offset:08X}: {e}", error=True)
+                self._probe.write_U32(FLASH_CR, 1 << 7)  # lock
+                return False
+
+            # Wait for BSY to clear
+            for _ in range(100):
+                sr = self._probe.read_U32(FLASH_SR)
+                if not (sr & 1):
+                    break
+                import time
+                time.sleep(0.001)
+            else:
+                self._log(f"Flash timeout at 0x{base_addr + offset:08X}", error=True)
+                self._probe.write_U32(FLASH_CR, 1 << 7)
+                return False
+
+            # Check for errors
+            if sr & ((1 << 2) | (1 << 4)):  # PGAERR | WRPERR
+                self._log(f"Flash error at 0x{base_addr + offset:08X}: SR=0x{sr:08X}", error=True)
+                self._probe.write_U32(FLASH_CR, 1 << 7)
+                return False
+
+            offset += 2
+            self.progress.setValue(offset)
+            if offset % 32 == 0:
+                QApplication.processEvents()
+
+        # Lock flash
+        self._probe.write_U32(FLASH_CR, 1 << 7)
+        self._log(f"Flash complete: {len(data)} bytes written.", ok=True)
+        return True
+
+    def _flash_raw(self, base_addr: int, data: bytes) -> bool:
+        """Write to SRAM via raw memory writes (no flash controller needed)."""
+        chunk_size = 256
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset:offset + chunk_size]
+            try:
+                self._probe.write_mem_U8(base_addr + offset, list(chunk))
+            except Exception as e:
+                self._log(f"Write error at offset 0x{offset:X}: {e}", error=True)
+                return False
+            offset += len(chunk)
+            self.progress.setValue(offset)
+            QApplication.processEvents()
+
+        self._log(f"Flash complete: {len(data)} bytes written.", ok=True)
+        return True
 
     # ------------------------------------------------------------------
     # Verify operation
@@ -327,7 +427,7 @@ class FlashProgrammer(QWidget):
                 self._log(f"Read error at offset 0x{offset:X}: {e}", error=True)
                 return
 
-            if isinstance(actual, list):
+            if isinstance(actual, (list, tuple)):
                 for i, (a, e) in enumerate(zip(actual, expected)):
                     if a != e:
                         mismatches += 1
@@ -339,6 +439,7 @@ class FlashProgrammer(QWidget):
 
             offset += len(expected)
             self.progress.setValue(offset)
+            QApplication.processEvents()
 
         if mismatches == 0:
             self._log("Verification passed: all bytes match.", ok=True)

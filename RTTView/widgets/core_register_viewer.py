@@ -173,7 +173,7 @@ class CoreRegisterViewer(QWidget):
 
     def _init_timer(self):
         self._timer = QTimer(self)
-        self._timer.setInterval(100)
+        self._timer.setInterval(500)
         self._timer.timeout.connect(self._refresh)
 
     # ------------------------------------------------------------------

@@ -1,4 +1,12 @@
 setting.ini
+web_settings.ini
+server_*.log
+*.log
+.superpowers/
+.sisyphus/
+dist/
+build/
+*.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

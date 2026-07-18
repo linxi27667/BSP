@@ -1,6 +1,8 @@
 """Comprehensive test suite for RTTView."""
 import sys, os, struct, tempfile
-sys.path.insert(0, '.')
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+os.chdir(_ROOT)
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 # Must create QApplication before importing any QWidget subclasses
@@ -39,10 +41,7 @@ def test_imports():
     from widgets.task_viewer import TaskViewer
     from widgets.crash_analyzer import CrashAnalyzer
     from widgets.flash_programmer import FlashProgrammer
-    from xlink import XLink
-    import jlink, openocd
-    assert jlink.JLink is JLinkProbe
-    assert openocd.OpenOCD is OpenOCDProbe
+    from core.xlink import XLink
 
 # ---- SVD ----
 def test_svd():

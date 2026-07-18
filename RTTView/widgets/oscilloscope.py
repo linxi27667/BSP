@@ -71,6 +71,9 @@ class Oscilloscope(QWidget):
         self._channels = []       # list of dicts: {addr, type, scale, series}
         self._mem_channels = []   # memory channel configs from table
         self._x_pos = 0           # rolling x position
+        self._triggered = False   # trigger state
+        self._pre_trig_buf = []   # pre-trigger circular buffer
+        self._prev_trig_val = None  # for edge detection
 
         self._init_ui()
         self._init_chart()
@@ -261,6 +264,9 @@ class Oscilloscope(QWidget):
             return
         self._running = True
         self._single_shot_pending = False
+        self._triggered = False
+        self._prev_trig_val = None
+        self._pre_trig_buf.clear()
         self.btn_start.setText("停止")
         self._timer.start()
 
@@ -343,8 +349,40 @@ class Oscilloscope(QWidget):
         if not data:
             return
 
-        # Append points to series
         num_active = min(len(data), self.spin_ch_count.value())
+        trig_mode = self.cmb_trig_mode.currentText()
+
+        # Trigger logic
+        if trig_mode != "自由":
+            trig_ch = min(self.cmb_trig_ch.currentIndex(), num_active - 1)
+            trig_level = self.spin_trig_level.value()
+            trig_val = data[trig_ch]
+
+            if not self._triggered:
+                # Check for edge trigger
+                if self._prev_trig_val is not None:
+                    rising = (self._prev_trig_val < trig_level <= trig_val)
+                    falling = (self._prev_trig_val > trig_level >= trig_val)
+                    if (trig_mode == "上升沿" and rising) or \
+                       (trig_mode == "下降沿" and falling):
+                        self._triggered = True
+                        # Flush pre-trigger buffer
+                        for pts in self._pre_trig_buf:
+                            for i in range(num_active):
+                                self._series_list[i].append(pts[0], pts[1][i])
+                                self._x_pos = pts[0] + 1
+                        self._pre_trig_buf.clear()
+                self._prev_trig_val = trig_val
+
+                if not self._triggered:
+                    # Buffer pre-trigger samples (keep last screen)
+                    self._pre_trig_buf.append((self._x_pos, data[:num_active]))
+                    if len(self._pre_trig_buf) > DIVISIONS * 100:
+                        self._pre_trig_buf.pop(0)
+                    self._x_pos += 1
+                    return
+
+        # Append points to series
         for i in range(num_active):
             self._series_list[i].append(self._x_pos, data[i])
 
@@ -381,9 +419,14 @@ class Oscilloscope(QWidget):
         values = []
         rows = self.tbl_channels.rowCount()
         for r in range(rows):
-            addr_text = self.tbl_channels.item(r, 0).text().strip()
+            addr_item = self.tbl_channels.item(r, 0)
             type_combo = self.tbl_channels.cellWidget(r, 1)
-            scale_text = self.tbl_channels.item(r, 2).text().strip()
+            scale_item = self.tbl_channels.item(r, 2)
+            if addr_item is None or scale_item is None:
+                values.append(0.0)
+                continue
+            addr_text = addr_item.text().strip()
+            scale_text = scale_item.text().strip()
 
             try:
                 addr = int(addr_text, 0)  # supports 0x prefix

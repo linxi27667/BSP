@@ -76,10 +76,10 @@ class TaskInfo:
     @property
     def stack_size(self) -> int:
         """Total stack size in bytes.  Uses the 0xA5A5A5A5 watermark
-        boundary if available, otherwise falls back to stack_used."""
+        boundary if available, otherwise returns 0 (unknown)."""
         if self.stack_limit > self.stack_base:
             return self.stack_limit - self.stack_base
-        return self.stack_used  # fallback: show bytes, not percentage
+        return 0  # unknown total
 
     @property
     def stack_usage_percent(self) -> float:
@@ -333,7 +333,9 @@ class FreeRTOSAnalyzer:
             if stack_limit and stack_limit > px_top:
                 stack_used = stack_limit - px_top
             else:
-                stack_used = max(0, px_top - px_stack)
+                # Fallback: px_top - px_stack = remaining free bytes (not used).
+                # Report as negative to signal "unknown total" to the UI.
+                stack_used = 0
 
             return TaskInfo(
                 name=name,
@@ -357,7 +359,7 @@ class FreeRTOSAnalyzer:
 
         - If tcb is the current TCB -> RUNNING
         - If xEventListItem.pvContainer != NULL -> BLOCKED (waiting on event)
-        - If uxTopReadyPriority bit is set for this task -> READY
+        - If xStateListItem.pvContainer == NULL -> SUSPENDED (not in any list)
         - Fallback -> READY
         """
         try:
@@ -365,8 +367,7 @@ class FreeRTOSAnalyzer:
             if self._current_tcb_cache and self._current_tcb_cache == tcb_addr:
                 return TASK_STATE_RUNNING
 
-            # Check xEventListItem.pvContainer
-            # xEventListItem is at offset 0x18 from TCB base
+            # Check xEventListItem.pvContainer (offset 0x18 from TCB base)
             event_item = tcb_addr + 0x18
             event_container = _read_u32(
                 self.probe, event_item + LIST_ITEM_OFFSET_PV_CONTAINER
@@ -374,8 +375,16 @@ class FreeRTOSAnalyzer:
             if event_container != 0:
                 return TASK_STATE_BLOCKED
 
-            # Check uxTopReadyPriority at offset 0x24 (varies by config)
-            # This is fragile; default to READY
+            # Check xStateListItem.pvContainer
+            # If the task's state list item has no container, it's suspended
+            # (vTaskSuspend removes the item from its list)
+            state_item = tcb_addr + TCB_OFFSET_X_STATE_LIST_ITEM
+            state_container = _read_u32(
+                self.probe, state_item + LIST_ITEM_OFFSET_PV_CONTAINER
+            )
+            if state_container == 0:
+                return TASK_STATE_SUSPENDED
+
             return TASK_STATE_READY
 
         except Exception:

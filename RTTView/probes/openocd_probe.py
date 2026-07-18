@@ -3,6 +3,7 @@
 import re
 import time
 import socket
+import functools
 
 from .base import DebugProbe
 from . import register_probe
@@ -13,6 +14,7 @@ def _halt_required(func):
 
     Skipped when probe.auto_halt is False (e.g. oscilloscope live sampling).
     """
+    @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         if not getattr(self, 'auto_halt', True):
             return func(self, *args, **kwargs)
@@ -110,7 +112,6 @@ class OpenOCDProbe(DebugProbe):
                 break
         return data
 
-    @_halt_required
     def read_U32(self, addr):
         return self.read_mem_U32(addr, 1)[0]
 
@@ -146,6 +147,9 @@ class OpenOCDProbe(DebugProbe):
     # -- Register Access ------------------------------------------
 
     def read_reg(self, reg):
+        reg = reg.lower()
+        if reg not in self._core_regs:
+            raise ValueError(f'Unknown register: {reg}')
         res = self._exec('reg {}'.format(self._core_regs[reg]))
         return int(res.split(':')[1].strip(), 16)
 
@@ -153,6 +157,9 @@ class OpenOCDProbe(DebugProbe):
         return {reg: self.read_reg(reg) for reg in rlist}
 
     def write_reg(self, reg, val):
+        reg = reg.lower()
+        if reg not in self._core_regs:
+            raise ValueError(f'Unknown register: {reg}')
         self._exec('reg {} {:#x}'.format(self._core_regs[reg], val))
 
     # -- CPU Control ----------------------------------------------

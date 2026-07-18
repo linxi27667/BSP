@@ -5,27 +5,27 @@ Import this module instead of duplicating color hex values in each widget::
     from widgets.styles import *
 """
 
-# ---- Core palette (VS Code dark) ----
-BG_DARK = "#1E1E1E"
-BG_INPUT = "#252526"
-BG_HEADER = "#2D2D2D"
-BORDER = "#3C3C3C"
-TEXT = "#D4D4D4"
-TEXT_DIM = "#808080"
-ACCENT = "#007ACC"
-SELECTION = "#264F78"
+# ---- Core palette (GitHub Dark) ----
+BG_DARK = "#0D1117"
+BG_INPUT = "#0D1117"
+BG_HEADER = "#161B22"
+BORDER = "#30363D"
+TEXT = "#C9D1D9"
+TEXT_DIM = "#8B949E"
+ACCENT = "#1F6FEB"
+SELECTION = "#1F6FEB"
 
 # ---- Semantic colors ----
-GREEN = "#4CAF50"
-ORANGE = "#FF9800"
-RED = "#F44336"
-YELLOW = "#FFC107"
-CYAN = "#4FC1FF"
-TEAL = "#4EC9B0"
-PURPLE = "#C586C0"
-NUMBER = "#B5CEA8"     # numeric literal green
-STRING = "#CE9178"     # string orange
-COMMENT = "#6A9955"    # comment green
+GREEN = "#3FB950"
+ORANGE = "#D29922"
+RED = "#F85149"
+YELLOW = "#E3B341"
+CYAN = "#39D2C0"
+TEAL = "#39D2C0"
+PURPLE = "#BC8CFF"
+NUMBER = "#79C0FF"     # numeric blue
+STRING = "#A5D6FF"     # string light blue
+COMMENT = "#8B949E"    # comment grey
 
 # ---- Stack usage colors ----
 STACK_GREEN = GREEN
@@ -41,6 +41,12 @@ FONT_SIZE_LARGE = "13px"
 
 def mono_font(size=FONT_SIZE):
     return f'font-family: "{FONT_MONO}"; font-size: {size};'
+
+def font_size_int(size=FONT_SIZE):
+    """Parse FONT_SIZE string (e.g. '11px') to int. Handles 'px', 'pt', bare numbers."""
+    import re
+    m = re.search(r'(\d+)', size)
+    return int(m.group(1)) if m else 11
 
 def toolbar_style():
     return f"""

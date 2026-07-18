@@ -4,11 +4,14 @@ Verifies:
   1. All 4 probes register correctly when imported
   2. All probe classes inherit from DebugProbe
   3. create_probe() works for each probe type (construction without opening)
-  4. Legacy imports (import jlink, import openocd) still work
-  5. jlink.TIF.SWD == 1 still works
 """
 
 import sys
+import os
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+os.chdir(_ROOT)
 
 passed = 0
 failed = 0
@@ -69,30 +72,13 @@ for name in expected:
         fail(f"create_probe('{name}')", str(e))
 
 
-# ── 5. Legacy imports still work ─────────────────────────────────
+# ── 5. core.xlink import ─────────────────────────────────────────
 
 try:
-    import jlink
-    ok("import jlink (legacy)")
+    from core.xlink import XLink
+    ok("from core.xlink import XLink")
 except Exception as e:
-    fail("import jlink", str(e))
-
-try:
-    import openocd
-    ok("import openocd (legacy)")
-except Exception as e:
-    fail("import openocd", str(e))
-
-
-# ── 6. jlink.TIF.SWD == 1 ───────────────────────────────────────
-
-try:
-    if jlink.TIF.SWD == 1:
-        ok("jlink.TIF.SWD == 1")
-    else:
-        fail("jlink.TIF.SWD", f"expected 1, got {jlink.TIF.SWD}")
-except Exception as e:
-    fail("jlink.TIF.SWD", str(e))
+    fail("core.xlink import", str(e))
 
 
 # ── Summary ──────────────────────────────────────────────────────

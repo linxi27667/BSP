@@ -76,15 +76,31 @@ class Session:
             self.probe = None
 
 
+def _jlink_present() -> bool:
+    try:
+        import pylink
+        jl = pylink.JLink()
+        try:
+            return bool(jl.connected_emulators())
+        except Exception:
+            pass
+        try:
+            return int(jl.num_connected_emulators()) > 0
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def list_local_probes() -> list[dict]:
     out = []
-    # J-Link: always offer (open will fail if none)
+    jlink_ok = _jlink_present()
     out.append({
-        'name': 'J-Link (remote)',
+        'name': 'J-Link (remote)' if jlink_ok else 'J-Link (未检测到)',
         'type': 'jlink',
         'index': 0,
         'backend': 'pylink',
-        'available': True,
+        'available': jlink_ok,
     })
     try:
         st = STLinkProbe.detect()

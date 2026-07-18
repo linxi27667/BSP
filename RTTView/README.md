@@ -57,29 +57,38 @@ python web_rttview.py --host 0.0.0.0 --port 5000 --ssl --no-browser
 | SWD 烧录 | `flash_file` | ST-LINK_CLI `-P` | 有限 | 视配置 |
 | 串口烧录 | 共用 UART 页（pyserial / STM32 ISP） |  |  |  |
 
-### 三种入口（顶栏「入口」）
+### 四种入口（顶栏「入口」）
 
 | 入口 | 探针在哪 | 怎么连 |
 |------|----------|--------|
-| **浏览器直连 (WebUSB)** | 插在**你打开网页的电脑** | **必须 https 或 localhost** → 点连接 → 选 ST-Link |
-| **本机 USB (服务器)** | 插在跑 `web_rttview` 的机器 | 扫描 → 选探针 → 连接 |
-| **远程代理 (Agent)** | 插在另一台工位 | 工位跑 `probe_agent.py`，页面填 Agent 地址后扫描连接 |
+| **自动 (推荐)** | 智能择优 | 一点「连接」：本机 ST/DAP/J-Link → WebUSB → Agent |
+| **浏览器直连 (WebUSB)** | 插在**打开网页的电脑** | **https 或 localhost** → 选 **ST-Link / CMSIS-DAP** |
+| **本机 USB (服务器)** | 插在跑 `web_rttview` 的机器 | 扫描 → 选探针 → 连接（**J-Link 走这条**） |
+| **远程代理 (Agent)** | 插在另一台工位 | 工位 `probe_agent.py`，填 Agent 后连接 |
+
+**无感使用建议：**
+1. 服务器：`python web_rttview.py --host 0.0.0.0 --port 5000 --ssl --no-browser`
+2. 浏览器 Chrome/Edge：`https://服务器:5000`（自签名点「继续访问」）
+3. 入口保持 **自动** → 点 **连接**
+4. ST-Link / DAP 在你电脑上 → 弹 USB 选择（Windows 或需 [Zadig](https://zadig.akeo.ie/) WinUSB）
+5. J-Link → 插服务器本机或工位 Agent（**浏览器不能 WebUSB 直连 J-Link**，自动会走本机/Agent）
 
 **WebUSB 注意：**
 - 仅 Chrome / Edge；探针在**浏览器所在电脑** USB
-- **远程 `http://服务器IP` 会直接禁用 WebUSB**（不是 ST-Link 问题）→ 服务器加 `--ssl`，用 `https://` 打开；或本机 `http://127.0.0.1`
-- Windows 常需 [Zadig](https://zadig.akeo.ie/) 把 ST-Link 绑成 **WinUSB**
-- 不想 HTTPS/WinUSB：入口改「远程代理」，工位 `python probe_agent.py`
+- 支持 **ST-Link + CMSIS-DAP**；多区 SRAM 扫 `_SEGGER_RTT`；可发送 / 复位
+- **远程 `http://IP` 禁用 WebUSB** → 必须 `--ssl` 或 `127.0.0.1`
+- 不想 HTTPS/WinUSB：入口「远程代理」+ `probe_agent.py`（官方 ST 驱动也能用 CLI）
 
 **服务器部署示例：**
 ```shell
-# 服务器（要 WebUSB 一点就连）
+# 服务器（推荐：自动 + WebUSB）
+pip install -r requirements-web.txt
 python web_rttview.py --host 0.0.0.0 --port 5000 --ssl --no-browser
-# 浏览器: https://服务器:5000  入口=浏览器直连  连接
+# 浏览器: https://服务器:5000  入口=自动  连接
 
-# 或不用 WebUSB：工位
+# 工位代理（J-Link / 官方 ST 驱动 / 无 HTTPS）
 python probe_agent.py --host 0.0.0.0 --port 19201
-# 页面入口=远程代理，Agent=工位IP:19201
+# 页面 Agent=工位IP:19201
 ```
 
 ## 真机测试

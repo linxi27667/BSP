@@ -14,6 +14,7 @@ from probes.jlink_probe import JLinkProbe
 from probes.stlink_probe import STLinkProbe
 from probes.daplink_probe import DAPLinkProbe
 from probes.openocd_probe import OpenOCDProbe
+from probes.remote_probe import RemoteProbe
 
 os.environ['PATH'] = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    'libusb-1.0.24/MinGW64/dll') + os.pathsep + os.environ['PATH']
@@ -298,7 +299,8 @@ def scan_rtt_control_block(probe, address: str = 'auto', channel: int = 0):
     )
 
 
-def open_probe_from_state(probe_type=None, mode=None, speed=None, index=None, dllpath=None, core=None):
+def open_probe_from_state(probe_type=None, mode=None, speed=None, index=None, dllpath=None, core=None,
+                          agent=None, remote_type=None):
     """Create and open a probe using connection params (normalized mode)."""
     probe_type = probe_type or state.get('probe_type', 'jlink')
     mode = normalize_probe_mode(mode if mode is not None else state.get('probe_mode', 'arm'))
@@ -309,6 +311,22 @@ def open_probe_from_state(probe_type=None, mode=None, speed=None, index=None, dl
     if dllpath == '':
         dllpath = None
     core = core or core_name_for_mode(mode)
+    if agent is None:
+        agent = state.get('probe_agent') or ''
+    agent = (agent or '').strip()
+
+    # Remote agent path: server has no USB; desk machine runs probe_agent.py
+    if probe_type == 'remote':
+        if not agent:
+            raise Exception('Remote probe needs agent host (e.g. 192.168.1.10:19201)')
+        host, port, token = RemoteProbe.parse_agent(agent)
+        rtype = remote_type or state.get('remote_type') or 'stlink'
+        probe = RemoteProbe(
+            host=host, port=port, token=token,
+            probe_type=rtype, index=index, dllpath=dllpath,
+        )
+        probe.open(mode=mode, core=core, speed=speed)
+        return probe, mode
 
     if probe_type == 'jlink':
         if dllpath and not os.path.isfile(dllpath):
@@ -383,6 +401,7 @@ def load_settings():
         conf.read(SETTINGS_FILE, encoding='utf-8')
     mode = normalize_probe_mode(conf.get('connection', 'mode', fallback='arm'))
     dll = conf.get('connection', 'jlink_dll', fallback='') or _default_jlink_dll()
+    agent = conf.get('connection', 'agent', fallback='') or os.environ.get('RTTVIEW_AGENT', '')
     return {
         'probe_type': conf.get('connection', 'probe_type', fallback='jlink'),
         'probe_index': conf.getint('connection', 'probe_index', fallback=0),
@@ -393,6 +412,7 @@ def load_settings():
         'jlink_dll': dll,
         'encoding': conf.get('display', 'encoding', fallback='auto'),
         'last_rtt_cb': conf.get('connection', 'last_rtt_cb', fallback=''),
+        'agent': agent,
     }
 
 def save_settings(settings):
@@ -407,6 +427,7 @@ def save_settings(settings):
         'channel': str(settings.get('channel', 0)),
         'jlink_dll': settings.get('jlink_dll', '') or '',
         'last_rtt_cb': settings.get('last_rtt_cb', '') or '',
+        'agent': settings.get('agent', '') or '',
     }
     conf['display'] = {
         'encoding': settings.get('encoding', 'auto'),
@@ -445,37 +466,37 @@ def list_svd_files():
 # ─── Probe detection ──────────────────────────────────────────────────────
 
 @socketio.on('probe_detect')
-def handle_probe_detect():
+def handle_probe_detect(data=None):
     # Always list every probe backend with a clear display name
     probes = [
-        {'name': 'J-Link', 'type': 'jlink', 'backend': 'pylink'},
-        {'name': 'OpenOCD (TCP:6666)', 'type': 'openocd', 'backend': 'openocd'},
+        {'name': 'J-Link (本机)', 'type': 'jlink', 'backend': 'pylink'},
+        {'name': 'OpenOCD (本机 TCP:6666)', 'type': 'openocd', 'backend': 'openocd'},
     ]
     try:
         stlinks = STLinkProbe.detect()
         if not stlinks:
             probes.append({
-                'name': 'ST-Link (未检测到)',
+                'name': 'ST-Link (本机未检测到)',
                 'type': 'stlink', 'index': 0, 'backend': 'stlink', 'available': False,
             })
         for i, (dev, name) in enumerate(stlinks):
             # detect() already returns a friendly label (may include CLI/SN)
             label = name if str(name).startswith('ST-Link') else f'ST-Link · {name}'
             probes.append({
-                'name': label,
+                'name': f'{label} (本机)',
                 'type': 'stlink', 'index': i, 'backend': 'stlink-cli' if dev is None else 'stlink',
                 'available': True,
             })
     except Exception as e:
         probes.append({
-            'name': f'ST-Link (检测失败: {e})',
+            'name': f'ST-Link (本机检测失败: {e})',
             'type': 'stlink', 'index': 0, 'backend': 'stlink', 'available': False,
         })
     try:
         daplinks = DAPLinkProbe.detect()
         if not daplinks:
             probes.append({
-                'name': 'DAPLink / CMSIS-DAP (未检测到 · pyOCD)',
+                'name': 'DAPLink / CMSIS-DAP (本机未检测到 · pyOCD)',
                 'type': 'daplink', 'index': 0, 'backend': 'pyocd', 'available': False,
             })
         for i, probe in enumerate(daplinks):
@@ -483,15 +504,47 @@ def handle_probe_detect():
             uid = getattr(probe, 'unique_id', '') or ''
             label = f'DAPLink · {pname}' + (f' ({uid})' if uid else '') + ' · pyOCD'
             probes.append({
-                'name': label,
+                'name': f'{label} (本机)',
                 'type': 'daplink', 'index': i, 'backend': 'pyocd', 'available': True,
             })
     except Exception as e:
         probes.append({
-            'name': f'DAPLink / CMSIS-DAP (pyOCD 不可用: {e})',
+            'name': f'DAPLink / CMSIS-DAP (本机不可用: {e})',
             'type': 'daplink', 'index': 0, 'backend': 'pyocd', 'available': False,
         })
-    emit('probe_list', {'probes': probes})
+
+    # Remote agent probes (desk USB → server via probe_agent.py)
+    data = data or {}
+    agent = (data.get('agent') or state.get('probe_agent') or '').strip()
+    if not agent:
+        try:
+            agent = (load_settings().get('agent') or '').strip()
+        except Exception:
+            agent = ''
+    if agent:
+        try:
+            host, port, token = RemoteProbe.parse_agent(agent)
+            client = RemoteProbe(host, port, token)  # just for client
+            remote_list = client._client.list_probes()
+            client._client.close()
+            for p in remote_list:
+                probes.append({
+                    'name': f"{p.get('name') or p.get('type')} @ {host}:{port}",
+                    'type': 'remote',
+                    'remote_type': p.get('type') or 'stlink',
+                    'index': int(p.get('index') or 0),
+                    'agent': f'{host}:{port}' + (f':{token}' if token else ''),
+                    'backend': 'remote',
+                    'available': bool(p.get('available', True)),
+                })
+        except Exception as e:
+            probes.append({
+                'name': f'远程 Agent 连接失败 ({agent}): {e}',
+                'type': 'remote', 'index': 0, 'remote_type': 'stlink',
+                'agent': agent, 'backend': 'remote', 'available': False,
+            })
+
+    emit('probe_list', {'probes': probes, 'agent': agent})
 
 @socketio.on('connect')
 def handle_socket_connect():
@@ -531,12 +584,21 @@ def handle_probe_connect(data):
         dllpath = (data.get('dllpath') or data.get('jlink_dll') or '').strip() or None
         idx = int(data.get('index', 0) or 0)
         core = (data.get('core') or '').strip() or None
+        agent = (data.get('agent') or '').strip()
+        remote_type = (data.get('remote_type') or data.get('rtype') or '').strip() or None
+        if probe_type == 'remote' and not agent:
+            try:
+                agent = (load_settings().get('agent') or state.get('probe_agent') or '').strip()
+            except Exception:
+                agent = (state.get('probe_agent') or '').strip()
 
         # Fast path: already connected to the same probe — skip full reopen/scan
         if (
             state.get('connected') and state.get('probe')
             and state.get('probe_type') == probe_type
             and int(state.get('probe_index', 0) or 0) == idx
+            and (probe_type != 'remote' or state.get('probe_agent') == agent)
+            and (probe_type != 'remote' or state.get('remote_type') == (remote_type or state.get('remote_type')))
         ):
             rtt_found = bool(state.get('a_up_addr'))
             # Channel / address change → rescan only
@@ -587,9 +649,12 @@ def handle_probe_connect(data):
             state['probe_obj'] = None
             state['connected'] = False
 
+        state['probe_agent'] = agent
+        state['remote_type'] = remote_type or state.get('remote_type') or 'stlink'
         probe, mode = open_probe_from_state(
             probe_type=probe_type, mode=mode, speed=speed_khz,
             index=idx, dllpath=dllpath, core=core,
+            agent=agent, remote_type=remote_type or state.get('remote_type'),
         )
         xlk = xlink.XLink(probe)
 
@@ -734,7 +799,10 @@ def rtt_read():
                 max_chunk = 1024
         except Exception:
             pass
-        return poller.rtt_poll(a_up, max_chunk=max_chunk) or b''
+        try:
+            return poller.rtt_poll(a_up, max_chunk=max_chunk) or b''
+        except NotImplementedError:
+            pass
 
     data = probe.read_mem_U8(a_up, ctypes.sizeof(RingBuffer))
     aUp = RingBuffer.from_buffer(bytearray(data))
@@ -3840,6 +3908,9 @@ table { background: var(--bg-panel); border-radius: var(--radius); overflow: hid
     <input type="number" id="rtt-channel" value="0" min="0" max="15" style="width:48px">
     <label>DLL:</label>
     <input type="text" id="jlink-dll" placeholder="可选 JLink_x64.dll 路径" spellcheck="false" style="width:160px" title="留空则使用 pylink 自动发现">
+    <label>Agent:</label>
+    <input type="text" id="probe-agent" placeholder="工位IP:19201" spellcheck="false" style="width:150px" title="探针代理 host:port 或 host:port:token；工位运行 probe_agent.py">
+    <button class="btn" id="btn-agent-scan" onclick="detectProbes()" title="重新扫描本机+远程探针">扫描</button>
     <label>Encoding:</label>
     <select id="encoding-select">
         <option value="auto">自动检测</option>
@@ -4429,11 +4500,12 @@ function switchTab(tabId) {
 
 // ─── Probe detection ──────────────────────────────────────────────────
 function detectProbes() {
-    socket.emit('probe_detect');
+    var agent = (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim();
+    socket.emit('probe_detect', {agent: agent});
 }
 
 // Remember user / settings probe choice across detect refreshes
-var preferredProbe = null;  // {type, index}
+var preferredProbe = null;  // {type, index, agent, remote_type}
 var connecting = false;
 var lastProbeListSig = '';
 
@@ -4446,7 +4518,14 @@ function getSelectedProbe() {
 }
 
 function setPreferredProbe(p) {
-    if (p && p.type) preferredProbe = {type: p.type, index: p.index || 0};
+    if (p && p.type) {
+        preferredProbe = {
+            type: p.type,
+            index: p.index || 0,
+            agent: p.agent || '',
+            remote_type: p.remote_type || '',
+        };
+    }
 }
 
 socket.on('probe_list', function(data) {
@@ -4454,7 +4533,7 @@ socket.on('probe_list', function(data) {
     const prev = getSelectedProbe() || preferredProbe;
     // Signature: skip full rebuild if list unchanged (avoids wiping selection)
     var sig = (data.probes || []).map(function(p) {
-        return (p.type || '') + ':' + (p.index || 0) + ':' + (p.name || '') + ':' + (p.available !== false);
+        return (p.type || '') + ':' + (p.index || 0) + ':' + (p.name || '') + ':' + (p.available !== false) + ':' + (p.agent || '') + ':' + (p.remote_type || '');
     }).join('|');
     if (sig === lastProbeListSig && sel.options.length > 0) {
         return;
@@ -4463,22 +4542,28 @@ socket.on('probe_list', function(data) {
 
     sel.innerHTML = '';
     var preferIdx = 0;
-    // Prefer ST-Link when available if no prior choice
+    // Prefer remote ST-Link / local ST-Link when available if no prior choice
     var autoPrefer = null;
     (data.probes || []).forEach(function(p, i) {
         const opt = document.createElement('option');
-        opt.value = JSON.stringify({type: p.type, index: p.index || 0});
+        opt.value = JSON.stringify({
+            type: p.type,
+            index: p.index || 0,
+            agent: p.agent || '',
+            remote_type: p.remote_type || '',
+        });
         opt.textContent = p.name;
         if (p.available === false) {
             opt.disabled = true;
             opt.textContent = p.name + ' (不可用)';
         }
         sel.appendChild(opt);
-        if (prev && p.type === prev.type && (p.index || 0) === (prev.index || 0) && p.available !== false) {
+        if (prev && p.type === prev.type && (p.index || 0) === (prev.index || 0)
+            && (p.agent || '') === (prev.agent || '') && p.available !== false) {
             preferIdx = i;
         }
-        if (!prev && p.type === 'stlink' && p.available !== false && autoPrefer === null) {
-            autoPrefer = i;
+        if (!prev && p.available !== false && autoPrefer === null) {
+            if (p.type === 'remote' || p.type === 'stlink') autoPrefer = i;
         }
     });
     if (autoPrefer !== null && !prev) preferIdx = autoPrefer;
@@ -4549,8 +4634,13 @@ document.getElementById('btn-connect').addEventListener('click', function() {
         const probeData = JSON.parse(sel.value);
         setPreferredProbe(probeData);
         const dll = (document.getElementById('jlink-dll').value || '').trim();
+        var agent = (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim();
+        if (probeData.agent) agent = probeData.agent;
         setConnectUi('connecting');
-        appendTerminal('[*] 正在连接 ' + probeData.type + ' ...\n', '#569cd6');
+        var label = probeData.type === 'remote'
+            ? ('remote/' + (probeData.remote_type || '?') + ' @ ' + (agent || '?'))
+            : probeData.type;
+        appendTerminal('[*] 正在连接 ' + label + ' ...\n', '#569cd6');
         socket.emit('probe_connect', {
             type: probeData.type,
             index: probeData.index || 0,
@@ -4559,6 +4649,8 @@ document.getElementById('btn-connect').addEventListener('click', function() {
             address: document.getElementById('rtt-addr').value,
             channel: parseInt(document.getElementById('rtt-channel').value) || 0,
             dllpath: dll,
+            agent: agent,
+            remote_type: probeData.remote_type || '',
         });
     } else {
         socket.emit('probe_disconnect');
@@ -4571,7 +4663,7 @@ socket.on('connected', function(data) {
     var modeTag = data.mode ? ('/' + data.mode) : '';
     document.getElementById('status-text').textContent = '已连接 (' + data.probe_type + modeTag + ')';
     // Lock dropdown selection to the probe we actually connected
-    setPreferredProbe({type: data.probe_type, index: data.index || 0});
+    setPreferredProbe({type: data.probe_type, index: data.index || 0, agent: data.agent || '', remote_type: data.remote_type || ''});
     var sel = document.getElementById('probe-select');
     for (var i = 0; i < sel.options.length; i++) {
         try {
@@ -6047,6 +6139,12 @@ socket.on('settings', function(data) {
     if (data.channel !== undefined) document.getElementById('rtt-channel').value = data.channel;
     if (data.jlink_dll) document.getElementById('jlink-dll').value = data.jlink_dll;
     if (data.encoding) document.getElementById('encoding-select').value = data.encoding;
+    if (data.agent) {
+        var ag = document.getElementById('probe-agent');
+        if (ag) ag.value = data.agent;
+        // rescan so remote probes show up
+        setTimeout(detectProbes, 100);
+    }
 });
 
 socket.on('settings_saved', function() {
@@ -6070,6 +6168,7 @@ document.getElementById('btn-connect').addEventListener('click', function() {
             channel: parseInt(document.getElementById('rtt-channel').value) || 0,
             jlink_dll: (document.getElementById('jlink-dll').value || '').trim(),
             encoding: document.getElementById('encoding-select').value,
+            agent: (document.getElementById('probe-agent') && document.getElementById('probe-agent').value || '').trim() || (p.agent || ''),
         });
     }
 });

@@ -54,8 +54,18 @@ python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
 
 ### 服务器部署
 
-- 探针必须插在**运行 `web_rttview.py` 的机器**上
-- `--host 0.0.0.0` 对外监听；生产请加反向代理与鉴权
+- **本机探针**：探针插在运行 `web_rttview.py` 的机器上
+- **远程探针（推荐：服务器 Web + 工位 USB）**：
+  1. **工位**（插 ST-Link/J-Link）：
+     ```shell
+     python probe_agent.py --host 0.0.0.0 --port 19201 --token 可选密钥
+     ```
+     防火墙放行 **19201**
+  2. **服务器**：
+     ```shell
+     python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
+     ```
+  3. 浏览器打开服务器页面 → **Agent** 填 `工位IP:19201`（有 token 则 `IP:19201:token`）→ **扫描** → 选带 `@ 工位IP` 的探针 → **连接**
 - 不要并行打开 Keil / RTT Viewer 占用同一探针
 
 ## 真机测试

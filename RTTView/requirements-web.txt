@@ -6,3 +6,4 @@ hidapi
 six
 pyelftools
 pyserial
+pyopenssl>=23.0

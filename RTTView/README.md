@@ -30,14 +30,19 @@ python RTTView.py
 # Web（本机）
 python web_rttview.py
 
-# Web（服务器 / 局域网，探针插在服务器 USB）
+# Web（服务器 / 局域网）
 python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
-# 或 RTTVIEW_HOST=0.0.0.0 RTTVIEW_PORT=5000
+
+# Web + HTTPS（远程用浏览器直连 WebUSB 时必须；自签名证书）
+pip install pyopenssl
+python web_rttview.py --host 0.0.0.0 --port 5000 --ssl --no-browser
+# 浏览器打开 https://服务器IP:5000 → 高级 → 继续访问
+# 或 RTTVIEW_HOST=0.0.0.0 RTTVIEW_SSL=1
 ```
 
 ## Web 使用
 
-1. Probe 选 **J-Link / ST-Link / DAPLink / OpenOCD**
+1. 顶栏选 **入口**（见下表）
 2. Mode = **ARM SWD**，RTT = **auto**（自动搜 `_SEGGER_RTT`）
 3. **连接** → 找到 RTT 后自动刷 log；顶栏可 **复位 MCU / 复位+Halt**
 4. 页签：RTT、波形、示波器、SWO、RTOS、崩溃、核心寄存器、调试、SWD 烧录、串口烧录、SVD、内存
@@ -56,21 +61,25 @@ python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
 
 | 入口 | 探针在哪 | 怎么连 |
 |------|----------|--------|
-| **浏览器直连 (WebUSB)** | 插在**你打开网页的电脑** | 点「连接」→ Chrome/Edge 弹出选 ST-Link → 自动 RTT |
+| **浏览器直连 (WebUSB)** | 插在**你打开网页的电脑** | **必须 https 或 localhost** → 点连接 → 选 ST-Link |
 | **本机 USB (服务器)** | 插在跑 `web_rttview` 的机器 | 扫描 → 选探针 → 连接 |
 | **远程代理 (Agent)** | 插在另一台工位 | 工位跑 `probe_agent.py`，页面填 Agent 地址后扫描连接 |
 
-**WebUSB 注意（最省事、一点就连）：**
-- 仅 Chrome / Edge；探针必须在**浏览器所在电脑** USB 上
-- Windows 默认 ST 驱动常拦 WebUSB → 用 [Zadig](https://zadig.akeo.ie/) 把 ST-Link 绑成 **WinUSB**（之后官方 ST-LINK Utility 可能暂不可用，可换回驱动）
-- 也可不换驱动：工位跑 Agent，入口选「远程代理」
+**WebUSB 注意：**
+- 仅 Chrome / Edge；探针在**浏览器所在电脑** USB
+- **远程 `http://服务器IP` 会直接禁用 WebUSB**（不是 ST-Link 问题）→ 服务器加 `--ssl`，用 `https://` 打开；或本机 `http://127.0.0.1`
+- Windows 常需 [Zadig](https://zadig.akeo.ie/) 把 ST-Link 绑成 **WinUSB**
+- 不想 HTTPS/WinUSB：入口改「远程代理」，工位 `python probe_agent.py`
 
 **服务器部署示例：**
 ```shell
-# 服务器
-python web_rttview.py --host 0.0.0.0 --port 5000 --no-browser
-# 你在自己电脑浏览器打开 http://服务器:5000
-# 入口选「浏览器直连」→ 连接（USB 在你电脑上）
+# 服务器（要 WebUSB 一点就连）
+python web_rttview.py --host 0.0.0.0 --port 5000 --ssl --no-browser
+# 浏览器: https://服务器:5000  入口=浏览器直连  连接
+
+# 或不用 WebUSB：工位
+python probe_agent.py --host 0.0.0.0 --port 19201
+# 页面入口=远程代理，Agent=工位IP:19201
 ```
 
 ## 真机测试

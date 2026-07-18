@@ -54,7 +54,23 @@
     }
 
     supported() {
-      return !!(navigator.usb && navigator.usb.requestDevice);
+      return !!(navigator.usb && navigator.usb.requestDevice && window.isSecureContext);
+    }
+
+    /** Why WebUSB is unavailable — empty string if OK. */
+    unsupportedReason() {
+      if (typeof navigator === 'undefined') return '非浏览器环境';
+      if (!window.isSecureContext) {
+        return (
+          '当前页面不是安全上下文（http 远程 IP 会禁用 WebUSB）。' +
+          '请用 https://服务器地址 打开，或本机用 http://127.0.0.1；' +
+          '服务器加参数 --ssl'
+        );
+      }
+      if (!navigator.usb || !navigator.usb.requestDevice) {
+        return '当前浏览器不支持 WebUSB（请用 Chrome / Edge，不要用 iframe 无权限页）';
+      }
+      return '';
     }
 
     _status(msg) {
@@ -62,9 +78,8 @@
     }
 
     async connect() {
-      if (!this.supported()) {
-        throw new Error('当前浏览器不支持 WebUSB（请用 Chrome / Edge）');
-      }
+      const why = this.unsupportedReason();
+      if (why) throw new Error(why);
       const filters = PIDS.map((productId) => ({ vendorId: VID, productId }));
       this.device = await navigator.usb.requestDevice({ filters });
       await this.device.open();

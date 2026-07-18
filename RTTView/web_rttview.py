@@ -3933,7 +3933,7 @@ table { background: var(--bg-panel); border-radius: var(--radius); overflow: hid
         </select>
         <button class="btn" id="btn-probe-scan" onclick="detectProbes()" title="扫描探针">扫描</button>
     </span>
-    <span id="webusb-hint" style="color:var(--text-dim); font-size:12px;">插上 ST-Link 后点连接，浏览器弹窗选设备</span>
+    <span id="webusb-hint" style="color:var(--text-dim); font-size:12px;">需 HTTPS 或本机 localhost；插 ST-Link 后点连接</span>
     <label>Mode:</label>
     <select id="mode-select">
         <option value="arm" selected>ARM SWD</option>
@@ -4557,6 +4557,10 @@ function getProbeScope() {
     return el ? el.value : 'webusb';
 }
 
+function webusbAvailable() {
+    return !!(window.isSecureContext && navigator.usb && navigator.usb.requestDevice);
+}
+
 function updateScopeUi() {
     var scope = getProbeScope();
     var agentBox = document.getElementById('agent-box');
@@ -4564,7 +4568,21 @@ function updateScopeUi() {
     var hint = document.getElementById('webusb-hint');
     if (agentBox) agentBox.style.display = (scope === 'remote') ? 'inline-flex' : 'none';
     if (localBox) localBox.style.display = (scope === 'local' || scope === 'remote') ? 'inline-flex' : 'none';
-    if (hint) hint.style.display = (scope === 'webusb') ? 'inline' : 'none';
+    if (hint) {
+        hint.style.display = (scope === 'webusb') ? 'inline' : 'none';
+        if (scope === 'webusb' && !webusbAvailable()) {
+            if (!window.isSecureContext) {
+                hint.style.color = '#f0a020';
+                hint.textContent = '当前是 http 远程页，WebUSB 被浏览器禁用 → 用 https（服务器 --ssl）或改「远程代理」';
+            } else {
+                hint.style.color = '#f0a020';
+                hint.textContent = '请用 Chrome/Edge 打开';
+            }
+        } else if (scope === 'webusb') {
+            hint.style.color = 'var(--text-dim)';
+            hint.textContent = '插上 ST-Link 后点连接，浏览器弹窗选设备';
+        }
+    }
     if (scope === 'local' || scope === 'remote') detectProbes();
 }
 
@@ -4705,6 +4723,20 @@ async function connectWebUsb() {
         return;
     }
     webusbClient = new WebUsbStlinkRtt();
+    var why = webusbClient.unsupportedReason && webusbClient.unsupportedReason();
+    if (why) {
+        appendTerminal('[!] WebUSB 不可用: ' + why + '\n', '#f44336');
+        if (!window.isSecureContext) {
+            appendTerminal('[*] 做法 A: 服务器 python web_rttview.py --host 0.0.0.0 --ssl --no-browser\n', 'orange');
+            appendTerminal('[*]         浏览器打开 https://服务器IP:5000 ，点「高级→继续访问」\n', 'orange');
+            appendTerminal('[*] 做法 B: 入口改「远程代理」，工位跑 python probe_agent.py（不用 HTTPS/WinUSB）\n', 'orange');
+        } else {
+            appendTerminal('[*] 请用 Chrome / Edge\n', 'orange');
+        }
+        webusbClient = null;
+        setConnectUi('idle');
+        return;
+    }
     webusbClient.onStatus = function(m) { appendTerminal('[WebUSB] ' + m + '\n', '#569cd6'); };
     webusbClient.onData = function(u8) {
         var t = decodeRttBytes(u8);
@@ -4723,8 +4755,11 @@ async function connectWebUsb() {
             document.getElementById('rtt-stats').textContent = '0x' + webusbClient.cb.toString(16);
         }
     } catch (e) {
-        appendTerminal('[!] WebUSB 失败: ' + (e.message || e) + '\n', '#f44336');
-        appendTerminal('[*] 提示: Chrome/Edge；Windows 需 Zadig 把 ST-Link 绑成 WinUSB\n', 'orange');
+        var msg = (e && e.message) ? e.message : String(e);
+        appendTerminal('[!] WebUSB 失败: ' + msg + '\n', '#f44336');
+        if (/Access|claim|NotFound|Security/i.test(msg)) {
+            appendTerminal('[*] Windows: Zadig 把 ST-Link 绑成 WinUSB；关掉占用该口的 ST 工具\n', 'orange');
+        }
         try { await webusbClient.disconnect(); } catch (x) {}
         webusbClient = null;
         setConnectUi('idle');
@@ -6351,6 +6386,39 @@ signal.signal(signal.SIGTERM, _shutdown_handler)
 
 # ─── Main entry point ──────────────────────────────────────────────────────────
 
+def _ssl_context_adhoc_or_files():
+    """Self-signed TLS so WebUSB works on https://server-ip (Chrome secure context)."""
+    try:
+        import OpenSSL  # noqa: F401
+        return 'adhoc'
+    except ImportError:
+        pass
+    cert_dir = Path(__file__).resolve().parent / 'certs'
+    cert_dir.mkdir(exist_ok=True)
+    cert_file = cert_dir / 'cert.pem'
+    key_file = cert_dir / 'key.pem'
+    if cert_file.is_file() and key_file.is_file():
+        return (str(cert_file), str(key_file))
+    # try openssl CLI once
+    import subprocess
+    try:
+        subprocess.run(
+            [
+                'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
+                '-keyout', str(key_file), '-out', str(cert_file),
+                '-days', '3650', '-nodes', '-subj', '/CN=RTTView',
+            ],
+            check=True, capture_output=True,
+        )
+        return (str(cert_file), str(key_file))
+    except Exception as e:
+        raise SystemExit(
+            'HTTPS 需要 pyOpenSSL 或系统 openssl，以便生成自签名证书。\n'
+            '  pip install pyopenssl\n'
+            f'  或手动生成 certs/cert.pem + certs/key.pem\n  ({e})'
+        )
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Web RTTView')
@@ -6358,15 +6426,29 @@ if __name__ == '__main__':
                         help='Bind address (0.0.0.0 for LAN/server deploy)')
     parser.add_argument('--port', type=int, default=int(os.environ.get('RTTVIEW_PORT', '5000')))
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--ssl', action='store_true',
+                        default=os.environ.get('RTTVIEW_SSL', '').strip() in ('1', 'true', 'yes'),
+                        help='HTTPS self-signed (required for WebUSB when not on localhost)')
     args = parser.parse_args()
 
     # Start throughput reporter thread
     socketio.start_background_task(throughput_reporter_thread)
 
+    ssl_ctx = _ssl_context_adhoc_or_files() if args.ssl else None
+    scheme = 'https' if ssl_ctx else 'http'
+
     if not args.no_browser and args.host in ('127.0.0.1', 'localhost'):
-        threading.Timer(1.0, lambda: webbrowser.open(f'http://127.0.0.1:{args.port}')).start()
-    print(f'Web RTTView running at http://{args.host}:{args.port}')
+        threading.Timer(1.0, lambda: webbrowser.open(f'{scheme}://127.0.0.1:{args.port}')).start()
+    print(f'Web RTTView running at {scheme}://{args.host}:{args.port}')
+    if ssl_ctx:
+        print('  TLS: self-signed — browser may warn; click Advanced → Continue')
+        print('  WebUSB works on this https URL (Chrome/Edge)')
+    else:
+        print('  Tip: remote WebUSB needs --ssl (or use probe_agent / local USB)')
     print('  RTT search: multi-region auto (or set Address)')
-    print('  Probes: J-Link / ST-Link / DAPLink(pyOCD) / OpenOCD')
+    print('  Probes: J-Link / ST-Link / DAPLink(pyOCD) / OpenOCD / WebUSB / Agent')
     print('  Serial flash: pyserial (STM32 ISP / raw)')
-    socketio.run(app, host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True)
+    run_kw = dict(host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True)
+    if ssl_ctx is not None:
+        run_kw['ssl_context'] = ssl_ctx
+    socketio.run(app, **run_kw)

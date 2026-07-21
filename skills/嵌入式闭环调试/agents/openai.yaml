@@ -1,0 +1,3 @@
+display_name: 嵌入式闭环调试
+short_description: ESP-IDF、Keil5 与 J-Link CLI 的编译、烧录和日志闭环。
+default_prompt: 使用嵌入式闭环调试技能，通过命令行完成这个 MCU 项目的编译、烧录、日志采集、问题诊断和连续修复；不要使用桌面端调试工具。
